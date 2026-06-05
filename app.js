@@ -644,14 +644,7 @@ function tick() {
                 }
             }
         }
-
-        if (stompFocusedIndices.has(stompActiveIndex)) {
-            if (stompSecondsLeft > 9.8 && !stompSaidReady) {
-                stompSaidReady = true;
-                speak(`注意${STOMP_NAMES[stompActiveIndex]}`);
-                playTransitionSound();
-            }
-        }
+        // '注意' voice alert has been removed, transition beep sound is kept automatically in stomp transition handler.
     }
 
     if (countdown < 10.0) {
