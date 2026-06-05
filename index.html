@@ -101,6 +101,15 @@
             </div>
 
             <div class="setting-item">
+                <label for="alert-mode-select">提示模式 (Alert Mode):</label>
+                <select id="alert-mode-select" class="custom-select">
+                    <option value="both" selected>語音與倒數嗶聲 (Voice & Beep)</option>
+                    <option value="beep">僅倒數嗶聲 (Beep Only)</option>
+                    <option value="voice">僅語音播報 (Voice Only)</option>
+                </select>
+            </div>
+
+            <div class="setting-item">
                 <label for="volume-slider">音量大小 (Volume):</label>
                 <div class="slider-wrapper">
                     <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="1" class="custom-slider">

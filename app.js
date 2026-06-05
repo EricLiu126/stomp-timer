@@ -17,15 +17,18 @@ let stompMuted = false;
 // Audio Configuration (Volume & Speed)
 let stompVolume = 1.0;
 let stompRate = 1.2;
+let stompAlertMode = "both";
 let preferredVoiceName = null;
+let wakeLock = null;
+let speechUnlocked = false;
 
 // Alarm triggers tracking
 let stompSaidWarning = false;
 let stompSaidReady = false;
+let stompBeeped = new Set();
 
 // TTS & Audio variables
 let beepAudio = null;
-let countdownAudio = null;
 let transitionAudio = null;
 let voicesList = [];
 let selectedVoice = null;
@@ -44,6 +47,7 @@ const timerDisplay = document.getElementById("timer-display");
 const modeDisplay = document.getElementById("mode-display");
 const statusBar = document.getElementById("status-bar");
 const voiceSelect = document.getElementById("voice-select");
+const alertModeSelect = document.getElementById("alert-mode-select");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeVal = document.getElementById("volume-val");
 const rateSlider = document.getElementById("rate-slider");
@@ -148,119 +152,11 @@ function createBeepWavUrl(frequency = 1000, duration = 0.08) {
     return URL.createObjectURL(blob);
 }
 
-// Generates a single WAV file containing three beeps spaced 1.0 second apart
-function createCountdownWavUrl() {
-    const sampleRate = 44100;
-    const duration = 2.2; // 3 beeps: at 0.0s, 1.0s, 2.0s. Total duration 2.2s.
-    const numSamples = sampleRate * duration;
-    const bufferSize = 44 + numSamples;
-    const buffer = new Uint8Array(bufferSize);
-
-    // 1. WAV Header (RIFF)
-    buffer[0] = 0x52; // 'R'
-    buffer[1] = 0x49; // 'I'
-    buffer[2] = 0x46; // 'F'
-    buffer[3] = 0x46; // 'F'
-    
-    const fileSize = bufferSize - 8;
-    buffer[4] = fileSize & 0xff;
-    buffer[5] = (fileSize >> 8) & 0xff;
-    buffer[6] = (fileSize >> 16) & 0xff;
-    buffer[7] = (fileSize >> 24) & 0xff;
-
-    buffer[8] = 0x57;  // 'W'
-    buffer[9] = 0x41;  // 'A'
-    buffer[10] = 0x56; // 'V'
-    buffer[11] = 0x45; // 'E'
-
-    // 2. fmt Subchunk
-    buffer[12] = 0x66; // 'f'
-    buffer[13] = 0x6d; // 'm'
-    buffer[14] = 0x74; // 't'
-    buffer[15] = 0x20; // ' '
-
-    buffer[16] = 16;   // Subchunk1Size
-    buffer[17] = 0;
-    buffer[18] = 0;
-    buffer[19] = 0;
-
-    buffer[20] = 1;    // AudioFormat (PCM)
-    buffer[21] = 0;
-    buffer[22] = 1;    // NumChannels (1 mono)
-    buffer[23] = 0;
-
-    buffer[24] = sampleRate & 0xff;
-    buffer[25] = (sampleRate >> 8) & 0xff;
-    buffer[26] = (sampleRate >> 16) & 0xff;
-    buffer[27] = (sampleRate >> 24) & 0xff;
-
-    const byteRate = sampleRate;
-    buffer[28] = byteRate & 0xff;
-    buffer[29] = (byteRate >> 8) & 0xff;
-    buffer[30] = (byteRate >> 16) & 0xff;
-    buffer[31] = (byteRate >> 24) & 0xff;
-
-    buffer[32] = 1;    // BlockAlign
-    buffer[33] = 0;
-    buffer[34] = 8;    // BitsPerSample (8 bits)
-    buffer[35] = 0;
-
-    // 3. Subchunk 2 (data)
-    buffer[36] = 0x64; // 'd'
-    buffer[37] = 0x61; // 'a'
-    buffer[38] = 0x74; // 't'
-    buffer[39] = 0x61; // 'a'
-
-    buffer[40] = numSamples & 0xff;
-    buffer[41] = (numSamples >> 8) & 0xff;
-    buffer[42] = (numSamples >> 16) & 0xff;
-    buffer[43] = (numSamples >> 24) & 0xff;
-
-    // 4. Generate Samples (silence center value 128)
-    buffer.fill(128, 44);
-
-    const frequency = 2000;
-    const beepDuration = 0.12;
-    const beepSamples = sampleRate * beepDuration;
-
-    // Place 3 beeps at 0.0s, 1.0s, and 2.0s
-    const startOffsets = [0.0, 1.0, 2.0];
-
-    for (let startOffset of startOffsets) {
-        const startIndex = Math.round(startOffset * sampleRate);
-        for (let i = 0; i < beepSamples; i++) {
-            const sampleIdx = startIndex + i;
-            if (sampleIdx >= numSamples) break;
-
-            const t = i / sampleRate;
-            const s = Math.sin(2 * Math.PI * frequency * t);
-            
-            // Fade out in the last 20% to prevent popping
-            let envelope = 1.0;
-            const fadeStart = beepSamples * 0.8;
-            if (i > fadeStart) {
-                envelope = 1.0 - ((i - fadeStart) / (beepSamples - fadeStart));
-            }
-            
-            const sampleValue = Math.round(128 + 127 * s * envelope);
-            buffer[44 + sampleIdx] = sampleValue;
-        }
-    }
-
-    const blob = new Blob([buffer], { type: "audio/wav" });
-    return URL.createObjectURL(blob);
-}
-
 function initAudioElements() {
     if (!beepAudio) {
         // Standard beep: 2000Hz (more piercing) and 0.12 seconds (longer and louder)
         const beepUrl = createBeepWavUrl(2000, 0.12);
         beepAudio = new Audio(beepUrl);
-    }
-    if (!countdownAudio) {
-        // 3-second countdown WAV containing 3 beeps spaced 1.0s apart
-        const countdownUrl = createCountdownWavUrl();
-        countdownAudio = new Audio(countdownUrl);
     }
     if (!transitionAudio) {
         // Transition tink: 2800Hz (high-pitched bell) and 0.16 seconds
@@ -272,39 +168,36 @@ function initAudioElements() {
 function initAudio() {
     initAudioElements();
     
-    // Play audio elements silently to unlock browser restrictions on iOS
+    // Play both audio elements silently to unlock browser restrictions on iOS
     try {
-        if (beepAudio) {
-            beepAudio.volume = 0.001;
-            beepAudio.play().then(() => {
-                beepAudio.pause();
-                beepAudio.currentTime = 0;
-            }).catch(e => console.warn("Beep audio unlock skipped:", e));
-        }
-        if (countdownAudio) {
-            countdownAudio.volume = 0.001;
-            countdownAudio.play().then(() => {
-                countdownAudio.pause();
-                countdownAudio.currentTime = 0;
-            }).catch(e => console.warn("Countdown audio unlock skipped:", e));
-        }
-        if (transitionAudio) {
-            transitionAudio.volume = 0.001;
-            transitionAudio.play().then(() => {
-                transitionAudio.pause();
-                transitionAudio.currentTime = 0;
-            }).catch(e => console.warn("Transition audio unlock skipped:", e));
-        }
+        beepAudio.volume = 0.001;
+        transitionAudio.volume = 0.001;
+        
+        beepAudio.play().then(() => {
+            beepAudio.pause();
+            beepAudio.currentTime = 0;
+        }).catch(e => console.warn("Beep audio unlock skipped:", e));
+        
+        transitionAudio.play().then(() => {
+            transitionAudio.pause();
+            transitionAudio.currentTime = 0;
+        }).catch(e => console.warn("Transition audio unlock skipped:", e));
     } catch (e) {
         console.warn("Audio unlock warning:", e);
     }
     
-    // Trigger a silent utterance to unlock iOS Speech Synthesis
-    try {
-        const silentUtterance = new SpeechSynthesisUtterance("");
-        window.speechSynthesis.speak(silentUtterance);
-    } catch (e) {
-        console.error("iOS speech synthesis unlock failed:", e);
+    // Trigger a silent/verbal utterance to unlock iOS Speech Synthesis
+    if (!speechUnlocked && window.speechSynthesis && !stompMuted) {
+        try {
+            window.speechSynthesis.resume();
+            const silentUtterance = new SpeechSynthesisUtterance("語音已連線");
+            silentUtterance.lang = "zh-TW";
+            silentUtterance.volume = stompVolume;
+            window.speechSynthesis.speak(silentUtterance);
+            speechUnlocked = true;
+        } catch (e) {
+            console.error("iOS speech synthesis unlock failed:", e);
+        }
     }
 
     // Refresh voices list upon user interaction (crucial for iOS Safari lazy loading)
@@ -329,35 +222,28 @@ function playBeep(isTransition = false) {
     }
 }
 
-function playCountdown() {
-    if (stompMuted) return;
-    initAudioElements();
-    if (countdownAudio) {
-        try {
-            countdownAudio.volume = stompVolume;
-            countdownAudio.currentTime = 0;
-            countdownAudio.play().catch(e => {
-                console.warn("Countdown play blocked in tick:", e);
-            });
-        } catch (e) {
-            console.warn("Countdown play error:", e);
-        }
-    }
-}
-
-function stopCountdown() {
-    if (countdownAudio) {
-        try {
-            countdownAudio.pause();
-            countdownAudio.currentTime = 0;
-        } catch (e) {
-            console.warn("Countdown stop error:", e);
-        }
-    }
-}
-
 function playTransitionSound() {
     playBeep(true);
+}
+
+// --- Screen Wake Lock API ---
+async function requestWakeLock() {
+    if ('wakeLock' in navigator) {
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('Screen Wake Lock is active');
+        } catch (err) {
+            console.warn(`Screen Wake Lock failed: ${err.message}`);
+        }
+    }
+}
+
+function releaseWakeLock() {
+    if (wakeLock !== null) {
+        wakeLock.release();
+        wakeLock = null;
+        console.log('Screen Wake Lock released');
+    }
 }
 
 // --- Text To Speech (Web Speech API) ---
@@ -419,16 +305,26 @@ function initVoices() {
 function speak(text) {
     if (stompMuted || !window.speechSynthesis) return;
     try {
-        window.speechSynthesis.cancel();
-        
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.volume = stompVolume; // Apply volume setting
-        utterance.rate = stompRate;     // Apply speech rate setting
-        
-        if (selectedVoice) {
-            utterance.voice = selectedVoice;
+        // Force resume in case WebKit is in a stuck paused state
+        window.speechSynthesis.resume();
+
+        const speakAction = () => {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = "zh-TW"; // Force Traditional Chinese to prevent English system voice silent failure
+            utterance.volume = stompVolume;
+            utterance.rate = stompRate;
+            if (selectedVoice) {
+                utterance.voice = selectedVoice;
+            }
+            window.speechSynthesis.speak(utterance);
+        };
+
+        if (window.speechSynthesis.speaking) {
+            window.speechSynthesis.cancel();
+            setTimeout(speakAction, 50); // Delay 50ms to allow iOS WebKit to clear its cancellation state
+        } else {
+            speakAction();
         }
-        window.speechSynthesis.speak(utterance);
     } catch (e) {
         console.warn("Speech synthesis failed:", e);
     }
@@ -436,24 +332,31 @@ function speak(text) {
 
 // --- Listeners & Controls ---
 function setupEventListeners() {
-    const addQuickListener = (btn, action) => {
-        btn.addEventListener("pointerdown", (e) => {
-            e.preventDefault();
-            initAudio();
-            action(e);
-        });
-        // Prevent default click behavior to avoid double trigger
-        btn.addEventListener("click", (e) => {
-            e.preventDefault();
-        });
-    };
-
     // Buttons interaction
-    addQuickListener(btnSync, () => triggerSync());
-    addQuickListener(btnPlayPause, () => togglePause());
-    addQuickListener(btnShift, () => triggerShift());
-    addQuickListener(btnMute, () => toggleMute());
-    addQuickListener(btnReset, () => resetFocus());
+    btnSync.addEventListener("click", () => {
+        initAudio();
+        triggerSync();
+    });
+
+    btnPlayPause.addEventListener("click", () => {
+        initAudio();
+        togglePause();
+    });
+
+    btnShift.addEventListener("click", () => {
+        initAudio();
+        triggerShift();
+    });
+
+    btnMute.addEventListener("click", () => {
+        initAudio();
+        toggleMute();
+    });
+
+    btnReset.addEventListener("click", () => {
+        initAudio();
+        resetFocus();
+    });
 
     // Double click or tap on timer display to reset back to standby
     timerDisplay.addEventListener("dblclick", () => {
@@ -473,7 +376,8 @@ function setupEventListeners() {
 
     // Corner stomp buttons focus toggle
     document.querySelectorAll(".stomp-btn").forEach(btn => {
-        addQuickListener(btn, () => {
+        btn.addEventListener("click", () => {
+            initAudio();
             const index = parseInt(btn.getAttribute("data-index"));
             toggleFocus(index);
         });
@@ -501,6 +405,19 @@ function setupEventListeners() {
         saveSettings();
     });
 
+    // Alert Mode Select
+    alertModeSelect.addEventListener("change", (e) => {
+        stompAlertMode = e.target.value;
+        saveSettings();
+        if (stompAlertMode === "voice") {
+            speak("語音模式");
+        } else if (stompAlertMode === "both") {
+            speak("語音與嗶聲模式");
+        } else {
+            playBeep();
+        }
+    });
+
     // Keyboard Fallbacks for Desktop users (Space: Sync, Enter: Shift/Calibrate)
     window.addEventListener("keydown", (e) => {
         if (e.code === "Space") {
@@ -513,6 +430,13 @@ function setupEventListeners() {
             triggerShift();
         }
     });
+
+    // Re-acquire Wake Lock when page becomes visible
+    document.addEventListener('visibilitychange', async () => {
+        if (stompActive && !stompPaused && document.visibilityState === 'visible') {
+            await requestWakeLock();
+        }
+    });
 }
 
 // --- Persistence ---
@@ -520,9 +444,11 @@ function saveSettings() {
     localStorage.setItem("stompMuted", stompMuted);
     localStorage.setItem("stompVolume", stompVolume);
     localStorage.setItem("stompRate", stompRate);
+    localStorage.setItem("stompAlertMode", stompAlertMode);
     localStorage.setItem("preferredVoiceName", preferredVoiceName || "");
 }
 
+// Load settings
 function loadSettings() {
     stompMuted = localStorage.getItem("stompMuted") === "true";
     
@@ -540,6 +466,12 @@ function loadSettings() {
         rateVal.textContent = `${stompRate.toFixed(1)}x`;
     }
 
+    const savedAlertMode = localStorage.getItem("stompAlertMode");
+    if (savedAlertMode !== null) {
+        stompAlertMode = savedAlertMode;
+        alertModeSelect.value = stompAlertMode;
+    }
+
     preferredVoiceName = localStorage.getItem("preferredVoiceName") || null;
     
     if (stompMuted) {
@@ -553,7 +485,6 @@ function loadSettings() {
 
 // --- State Machine Updates ---
 function triggerSync() {
-    stopCountdown();
     stompSecondsLeft = 10.0;
     stompActive = true;
     stompPaused = false;
@@ -564,10 +495,10 @@ function triggerSync() {
     updateUIState();
     playBeep();
     statusBar.textContent = "👣 腳踩計時已鎖定同步";
+    requestWakeLock();
 }
 
 function triggerShift() {
-    stopCountdown();
     stompActiveIndex = (stompActiveIndex + 1) % 4;
     stompActive = true;
     stompPaused = false;
@@ -578,10 +509,10 @@ function triggerShift() {
     updateUIState();
     playBeep();
     statusBar.textContent = "👣 腳踩招式已切換校正";
+    requestWakeLock();
 }
 
 function deactivateTimer() {
-    stopCountdown();
     stompActive = false;
     stompPaused = false;
     stompSecondsLeft = 10.0;
@@ -590,15 +521,18 @@ function deactivateTimer() {
     stompBeeped.clear();
     updateUIState();
     statusBar.textContent = "— 龍王待機中 —";
+    releaseWakeLock();
 }
 
 function togglePause() {
     if (!stompActive) return;
     stompPaused = !stompPaused;
-    if (stompPaused) {
-        stopCountdown();
-    }
     updateUIState();
+    if (stompPaused) {
+        releaseWakeLock();
+    } else {
+        requestWakeLock();
+    }
 }
 
 function toggleMute() {
@@ -607,7 +541,6 @@ function toggleMute() {
     if (stompMuted) {
         btnMute.classList.add("muted");
         btnMute.textContent = "🔇";
-        stopCountdown();
     } else {
         btnMute.classList.remove("muted");
         btnMute.textContent = "🔊";
@@ -625,8 +558,8 @@ function toggleFocus(index) {
     stompSaidWarning = false;
     stompSaidReady = false;
     stompBeeped.clear();
-    stopCountdown();
     updateUIState();
+    requestWakeLock();
 
     if (stompFocusedIndices.size > 0) {
         const names = Array.from(stompFocusedIndices).sort().map(i => STOMP_NAMES[i]).join("/");
@@ -641,7 +574,6 @@ function resetFocus() {
     stompSaidWarning = false;
     stompSaidReady = false;
     stompBeeped.clear();
-    stopCountdown();
     updateUIState();
     statusBar.textContent = "👣 回到輪播模式";
 }
@@ -766,7 +698,9 @@ function tick() {
         stompSaidReady = false;
         stompBeeped.clear();
         updateUIState();
-        playTransitionSound();
+        if (stompAlertMode === "both" || stompAlertMode === "beep") {
+            playTransitionSound();
+        }
     }
 
     let countdown = stompSecondsLeft;
@@ -788,13 +722,21 @@ function tick() {
 
         const nextStompIndex = (stompActiveIndex + 1) % 4;
         if (stompFocusedIndices.has(nextStompIndex)) {
-            if (stompSecondsLeft <= 6.0 && !stompSaidWarning) {
-                stompSaidWarning = true;
-                speak(`${STOMP_NAMES[nextStompIndex]}準備`);
+            // TTS voice warning (for both or voice mode)
+            if (stompAlertMode === "both" || stompAlertMode === "voice") {
+                if (stompSecondsLeft <= 6.0 && !stompSaidWarning) {
+                    stompSaidWarning = true;
+                    speak(`${STOMP_NAMES[nextStompIndex]}準備`);
+                }
             }
-            if (stompSecondsLeft <= 3.0 && !stompBeeped.has(3)) {
-                stompBeeped.add(3);
-                playCountdown();
+            // Beep countdown (for both or beep mode)
+            if (stompAlertMode === "both" || stompAlertMode === "beep") {
+                for (let thr of [3, 2, 1]) {
+                    if (stompSecondsLeft <= thr && !stompBeeped.has(thr)) {
+                        stompBeeped.add(thr);
+                        playBeep();
+                    }
+                }
             }
         }
         // '注意' voice alert has been removed, transition beep sound is kept automatically in stomp transition handler.
