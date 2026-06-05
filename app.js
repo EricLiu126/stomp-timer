@@ -25,7 +25,8 @@ let stompSaidReady = false;
 let stompBeeped = new Set();
 
 // TTS & Audio variables
-let audioContext = null;
+let beepAudio = null;
+let transitionAudio = null;
 let voicesList = [];
 let selectedVoice = null;
 
@@ -60,13 +61,116 @@ document.addEventListener("DOMContentLoaded", () => {
     timerInterval = setInterval(tick, 50);
 });
 
-// --- Sound Synthesizer (Web Audio API) ---
-function initAudio() {
-    if (!audioContext) {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+// Generates a short WAV file dynamically in memory and returns a local object URL
+function createBeepWavUrl(frequency = 1000, duration = 0.08) {
+    const sampleRate = 8000;
+    const numSamples = sampleRate * duration;
+    const bufferSize = 44 + numSamples;
+    const buffer = new Uint8Array(bufferSize);
+
+    // 1. WAV Header (RIFF)
+    buffer[0] = 0x52; // 'R'
+    buffer[1] = 0x49; // 'I'
+    buffer[2] = 0x46; // 'F'
+    buffer[3] = 0x46; // 'F'
+    
+    const fileSize = bufferSize - 8;
+    buffer[4] = fileSize & 0xff;
+    buffer[5] = (fileSize >> 8) & 0xff;
+    buffer[6] = (fileSize >> 16) & 0xff;
+    buffer[7] = (fileSize >> 24) & 0xff;
+
+    buffer[8] = 0x57;  // 'W'
+    buffer[9] = 0x41;  // 'A'
+    buffer[10] = 0x56; // 'V'
+    buffer[11] = 0x45; // 'E'
+
+    // 2. fmt Subchunk
+    buffer[12] = 0x66; // 'f'
+    buffer[13] = 0x6d; // 'm'
+    buffer[14] = 0x74; // 't'
+    buffer[15] = 0x20; // ' '
+
+    buffer[16] = 16;   // Subchunk1Size
+    buffer[17] = 0;
+    buffer[18] = 0;
+    buffer[19] = 0;
+
+    buffer[20] = 1;    // AudioFormat (PCM)
+    buffer[21] = 0;
+    buffer[22] = 1;    // NumChannels (1 mono)
+    buffer[23] = 0;
+
+    buffer[24] = sampleRate & 0xff;
+    buffer[25] = (sampleRate >> 8) & 0xff;
+    buffer[26] = (sampleRate >> 16) & 0xff;
+    buffer[27] = (sampleRate >> 24) & 0xff;
+
+    const byteRate = sampleRate;
+    buffer[28] = byteRate & 0xff;
+    buffer[29] = (byteRate >> 8) & 0xff;
+    buffer[30] = (byteRate >> 16) & 0xff;
+    buffer[31] = (byteRate >> 24) & 0xff;
+
+    buffer[32] = 1;    // BlockAlign
+    buffer[33] = 0;
+    buffer[34] = 8;    // BitsPerSample (8 bits)
+    buffer[35] = 0;
+
+    // 3. Subchunk 2 (data)
+    buffer[36] = 0x64; // 'd'
+    buffer[37] = 0x61; // 'a'
+    buffer[38] = 0x74; // 't'
+    buffer[39] = 0x61; // 'a'
+
+    buffer[40] = numSamples & 0xff;
+    buffer[41] = (numSamples >> 8) & 0xff;
+    buffer[42] = (numSamples >> 16) & 0xff;
+    buffer[43] = (numSamples >> 24) & 0xff;
+
+    // 4. Sine Wave Samples Generation
+    for (let i = 0; i < numSamples; i++) {
+        const t = i / sampleRate;
+        const s = Math.sin(2 * Math.PI * frequency * t);
+        const envelope = 1 - (i / numSamples); // Fade out to prevent popping
+        const sampleValue = Math.round(128 + 127 * s * envelope);
+        buffer[44 + i] = sampleValue;
     }
-    if (audioContext.state === "suspended") {
-        audioContext.resume();
+
+    const blob = new Blob([buffer], { type: "audio/wav" });
+    return URL.createObjectURL(blob);
+}
+
+function initAudioElements() {
+    if (!beepAudio) {
+        const beepUrl = createBeepWavUrl(1000, 0.08); // standard 1kHz beep
+        beepAudio = new Audio(beepUrl);
+    }
+    if (!transitionAudio) {
+        const transUrl = createBeepWavUrl(1800, 0.15); // higher pitch tink sound
+        transitionAudio = new Audio(transUrl);
+    }
+}
+
+function initAudio() {
+    initAudioElements();
+    
+    // Play both audio elements silently to unlock browser restrictions on iOS
+    try {
+        beepAudio.volume = 0.001;
+        transitionAudio.volume = 0.001;
+        
+        beepAudio.play().then(() => {
+            beepAudio.pause();
+            beepAudio.currentTime = 0;
+        }).catch(e => console.warn("Beep audio unlock skipped:", e));
+        
+        transitionAudio.play().then(() => {
+            transitionAudio.pause();
+            transitionAudio.currentTime = 0;
+        }).catch(e => console.warn("Transition audio unlock skipped:", e));
+    } catch (e) {
+        console.warn("Audio unlock warning:", e);
     }
     
     // Trigger a silent utterance to unlock iOS Speech Synthesis
@@ -81,36 +185,26 @@ function initAudio() {
     initVoices();
 }
 
-function playBeep(frequency = 1000, duration = 0.08) {
-    if (stompMuted || !audioContext) return;
-    try {
-        if (audioContext.state === "suspended") {
-            audioContext.resume();
+function playBeep(isTransition = false) {
+    if (stompMuted) return;
+    initAudioElements();
+    
+    const audio = isTransition ? transitionAudio : beepAudio;
+    if (audio) {
+        try {
+            audio.volume = stompVolume;
+            audio.currentTime = 0;
+            audio.play().catch(e => {
+                console.warn("Audio play blocked in tick:", e);
+            });
+        } catch (e) {
+            console.warn("Audio play error:", e);
         }
-        
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(frequency, audioContext.currentTime);
-        
-        // Apply volume slider setting
-        gain.gain.setValueAtTime(0.3 * stompVolume, audioContext.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
-        
-        osc.connect(gain);
-        gain.connect(audioContext.destination);
-        
-        osc.start();
-        osc.stop(audioContext.currentTime + duration);
-    } catch (e) {
-        console.warn("Audio playback failed:", e);
     }
 }
 
 function playTransitionSound() {
-    // High pitch pleasant "Tink" sound
-    playBeep(2000, 0.15);
+    playBeep(true);
 }
 
 // --- Text To Speech (Web Speech API) ---
@@ -546,7 +640,7 @@ function tick() {
             for (let thr of [3, 2, 1]) {
                 if (stompSecondsLeft <= thr && !stompBeeped.has(thr)) {
                     stompBeeped.add(thr);
-                    playBeep(1000, 0.08);
+                    playBeep();
                 }
             }
         }
