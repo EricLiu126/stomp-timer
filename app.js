@@ -76,6 +76,9 @@ function initAudio() {
     } catch (e) {
         console.error("iOS speech synthesis unlock failed:", e);
     }
+
+    // Refresh voices list upon user interaction (crucial for iOS Safari lazy loading)
+    initVoices();
 }
 
 function playBeep(frequency = 1000, duration = 0.08) {
@@ -127,11 +130,15 @@ function initVoices() {
         let otherCnVoices = chineseVoices.filter(v => !twVoices.includes(v) && !hkVoices.includes(v));
         
         let sortedVoices = [...twVoices, ...hkVoices, ...otherCnVoices];
-        if (sortedVoices.length === 0) {
-            sortedVoices = voicesList;
-        }
         
         voiceSelect.innerHTML = "";
+        
+        // Add default system voice option
+        const defaultOption = document.createElement("option");
+        defaultOption.value = "default";
+        defaultOption.textContent = "系統預設語音 (Default)";
+        voiceSelect.appendChild(defaultOption);
+
         sortedVoices.forEach(voice => {
             const option = document.createElement("option");
             option.value = voice.name;
@@ -143,9 +150,9 @@ function initVoices() {
             voiceSelect.appendChild(option);
         });
 
-        if (!selectedVoice && sortedVoices.length > 0) {
-            selectedVoice = sortedVoices[0];
-            voiceSelect.value = selectedVoice.name;
+        if (preferredVoiceName === "default" || !selectedVoice) {
+            voiceSelect.value = "default";
+            selectedVoice = null;
         }
     };
 
@@ -153,6 +160,13 @@ function initVoices() {
     if (window.speechSynthesis.onvoiceschanged !== undefined) {
         window.speechSynthesis.onvoiceschanged = loadVoicesList;
     }
+
+    // Fallback: If voices array is initially empty (common on mobile), force redraw option after a short delay
+    setTimeout(() => {
+        if (voicesList.length === 0) {
+            loadVoicesList();
+        }
+    }, 200);
 }
 
 function speak(text) {
