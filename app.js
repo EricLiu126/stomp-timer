@@ -12,218 +12,169 @@ let stompPaused = false;
 let stompActiveIndex = 0;
 let stompSecondsLeft = 10.0;
 let stompFocusedIndices = new Set();
-let stompMuted = false;
-
-// Audio Configuration (Volume & Speed)
-let stompVolume = 1.0;
-let stompRate = 1.2;
-let stompAlertMode = "both";
-let preferredVoiceName = null;
-let wakeLock = null;
-let speechUnlocked = false;
-
-// Alarm triggers tracking
-let stompSaidWarning = false;
-let stompSaidReady = false;
-let stompBeeped = new Set();
-
-// TTS & Audio variables
-let beepAudio = null;
-let transitionAudio = null;
-let voicesList = [];
-let selectedVoice = null;
 
 // Timing loop variables
 let timerInterval = null;
 let lastTickTime = Date.now();
+let wakeLock = null;
+let stompBeeped = new Set();
+let stompSaidWarning = false;
 
 // --- DOM Elements ---
 const btnSync = document.getElementById("btn-sync");
 const btnPlayPause = document.getElementById("btn-play-pause");
 const btnShift = document.getElementById("btn-shift");
-const btnMute = document.getElementById("btn-mute");
 const btnReset = document.getElementById("btn-reset");
 const timerDisplay = document.getElementById("timer-display");
 const modeDisplay = document.getElementById("mode-display");
 const statusBar = document.getElementById("status-bar");
-const voiceSelect = document.getElementById("voice-select");
-const alertModeSelect = document.getElementById("alert-mode-select");
-const volumeSlider = document.getElementById("volume-slider");
-const volumeVal = document.getElementById("volume-val");
-const rateSlider = document.getElementById("rate-slider");
-const rateVal = document.getElementById("rate-val");
+
+// --- Web Audio & Speech Synthesis API for Stomp Alerts ---
+let audioCtx = null;
+
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    if ('speechSynthesis' in window) {
+        window.speechSynthesis.resume();
+    }
+}
+
+function playBeep(frequency = 1000, duration = 0.1) {
+    initAudio();
+    if (!audioCtx) return;
+    
+    try {
+        const osc = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        
+        osc.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+        
+        gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+        
+        osc.start(audioCtx.currentTime);
+        osc.stop(audioCtx.currentTime + duration);
+    } catch (e) {
+        console.warn("Failed to play beep:", e);
+    }
+}
+
+function playDoubleBeep(frequency = 1000, duration = 0.08, gap = 0.08) {
+    playBeep(frequency, duration);
+    setTimeout(() => {
+        playBeep(frequency, duration);
+    }, (duration + gap) * 1000);
+}
+
+function speak(text) {
+    if (!('speechSynthesis' in window)) return;
+    try {
+        window.speechSynthesis.cancel(); // 清理串流佇列防堵阻塞
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-TW';
+        utterance.rate = 1.1; // 稍微加速，保持節奏
+        utterance.volume = 1.0;
+        window.speechSynthesis.speak(utterance);
+    } catch (e) {
+        console.warn("SpeechSynthesis speak failed:", e);
+    }
+}
 
 // --- Initialize App ---
 document.addEventListener("DOMContentLoaded", () => {
     loadSettings();
     updateUIState();
     setupEventListeners();
-    initVoices();
     
-    // Start interval
+    // Start high-precision 10ms interval
     lastTickTime = Date.now();
     timerInterval = setInterval(tick, 10);
 });
 
-// Generates a short WAV file dynamically in memory and returns a local object URL
-function createBeepWavUrl(frequency = 1000, duration = 0.08) {
-    const sampleRate = 44100;
-    const numSamples = sampleRate * duration;
-    const bufferSize = 44 + numSamples;
-    const buffer = new Uint8Array(bufferSize);
+// --- Listeners & Controls ---
+function setupEventListeners() {
+    // Buttons interaction
+    btnSync.addEventListener("click", () => {
+        initAudio();
+        triggerSync();
+    });
 
-    // 1. WAV Header (RIFF)
-    buffer[0] = 0x52; // 'R'
-    buffer[1] = 0x49; // 'I'
-    buffer[2] = 0x46; // 'F'
-    buffer[3] = 0x46; // 'F'
+    btnPlayPause.addEventListener("click", () => {
+        initAudio();
+        togglePause();
+    });
+
+    btnShift.addEventListener("click", () => {
+        initAudio();
+        triggerShift();
+    });
+
+    btnReset.addEventListener("click", () => {
+        initAudio();
+        resetFocus();
+    });
+
+    // Double click or tap on timer display to reset back to standby
+    timerDisplay.addEventListener("dblclick", () => {
+        initAudio();
+        deactivateTimer();
+    });
     
-    const fileSize = bufferSize - 8;
-    buffer[4] = fileSize & 0xff;
-    buffer[5] = (fileSize >> 8) & 0xff;
-    buffer[6] = (fileSize >> 16) & 0xff;
-    buffer[7] = (fileSize >> 24) & 0xff;
-
-    buffer[8] = 0x57;  // 'W'
-    buffer[9] = 0x41;  // 'A'
-    buffer[10] = 0x56; // 'V'
-    buffer[11] = 0x45; // 'E'
-
-    // 2. fmt Subchunk
-    buffer[12] = 0x66; // 'f'
-    buffer[13] = 0x6d; // 'm'
-    buffer[14] = 0x74; // 't'
-    buffer[15] = 0x20; // ' '
-
-    buffer[16] = 16;   // Subchunk1Size
-    buffer[17] = 0;
-    buffer[18] = 0;
-    buffer[19] = 0;
-
-    buffer[20] = 1;    // AudioFormat (PCM)
-    buffer[21] = 0;
-    buffer[22] = 1;    // NumChannels (1 mono)
-    buffer[23] = 0;
-
-    buffer[24] = sampleRate & 0xff;
-    buffer[25] = (sampleRate >> 8) & 0xff;
-    buffer[26] = (sampleRate >> 16) & 0xff;
-    buffer[27] = (sampleRate >> 24) & 0xff;
-
-    const byteRate = sampleRate;
-    buffer[28] = byteRate & 0xff;
-    buffer[29] = (byteRate >> 8) & 0xff;
-    buffer[30] = (byteRate >> 16) & 0xff;
-    buffer[31] = (byteRate >> 24) & 0xff;
-
-    buffer[32] = 1;    // BlockAlign
-    buffer[33] = 0;
-    buffer[34] = 8;    // BitsPerSample (8 bits)
-    buffer[35] = 0;
-
-    // 3. Subchunk 2 (data)
-    buffer[36] = 0x64; // 'd'
-    buffer[37] = 0x61; // 'a'
-    buffer[38] = 0x74; // 't'
-    buffer[39] = 0x61; // 'a'
-
-    buffer[40] = numSamples & 0xff;
-    buffer[41] = (numSamples >> 8) & 0xff;
-    buffer[42] = (numSamples >> 16) & 0xff;
-    buffer[43] = (numSamples >> 24) & 0xff;
-
-    // 4. Sine Wave Samples Generation
-    for (let i = 0; i < numSamples; i++) {
-        const t = i / sampleRate;
-        const s = Math.sin(2 * Math.PI * frequency * t);
-        
-        // Flat envelope: Keep 100% volume for the first 80%, then fade out in the last 20% to prevent popping
-        let envelope = 1.0;
-        const fadeStart = numSamples * 0.8;
-        if (i > fadeStart) {
-            envelope = 1.0 - ((i - fadeStart) / (numSamples - fadeStart));
+    let lastTap = 0;
+    timerDisplay.addEventListener("touchend", (e) => {
+        initAudio();
+        const currentTime = new Date().getTime();
+        const tapLength = currentTime - lastTap;
+        if (tapLength < 300 && tapLength > 0) {
+            deactivateTimer();
+            e.preventDefault();
         }
-        
-        const sampleValue = Math.round(128 + 127 * s * envelope);
-        buffer[44 + i] = sampleValue;
-    }
+        lastTap = currentTime;
+    });
 
-    const blob = new Blob([buffer], { type: "audio/wav" });
-    return URL.createObjectURL(blob);
+    // Corner stomp buttons focus toggle
+    document.querySelectorAll(".stomp-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            initAudio();
+            const index = parseInt(btn.getAttribute("data-index"));
+            toggleFocus(index);
+        });
+    });
+
+    // Re-acquire Wake Lock when page becomes visible
+    document.addEventListener('visibilitychange', async () => {
+        if (stompActive && !stompPaused && document.visibilityState === 'visible') {
+            await requestWakeLock();
+        }
+    });
 }
 
-function initAudioElements() {
-    if (!beepAudio) {
-        // Standard beep: 2000Hz (more piercing) and 0.12 seconds (longer and louder)
-        const beepUrl = createBeepWavUrl(2000, 0.12);
-        beepAudio = new Audio(beepUrl);
-    }
-    if (!transitionAudio) {
-        // Transition tink: 2800Hz (high-pitched bell) and 0.16 seconds
-        const transUrl = createBeepWavUrl(2800, 0.16);
-        transitionAudio = new Audio(transUrl);
-    }
+// --- Persistence (Focus Settings Only) ---
+function saveSettings() {
+    // We only save the focused stomp indices so they persist on page refresh
+    const focusedArray = Array.from(stompFocusedIndices);
+    localStorage.setItem("stompFocusedIndices", JSON.stringify(focusedArray));
 }
 
-function initAudio() {
-    initAudioElements();
-    
-    // Play both audio elements silently to unlock browser restrictions on iOS
+function loadSettings() {
     try {
-        beepAudio.volume = 0.001;
-        transitionAudio.volume = 0.001;
-        
-        beepAudio.play().then(() => {
-            beepAudio.pause();
-            beepAudio.currentTime = 0;
-        }).catch(e => console.warn("Beep audio unlock skipped:", e));
-        
-        transitionAudio.play().then(() => {
-            transitionAudio.pause();
-            transitionAudio.currentTime = 0;
-        }).catch(e => console.warn("Transition audio unlock skipped:", e));
+        const savedFocused = localStorage.getItem("stompFocusedIndices");
+        if (savedFocused !== null) {
+            const focusedArray = JSON.parse(savedFocused);
+            stompFocusedIndices = new Set(focusedArray);
+        }
     } catch (e) {
-        console.warn("Audio unlock warning:", e);
+        console.warn("Failed to load stompFocusedIndices:", e);
     }
-    
-    // Trigger a silent/verbal utterance to unlock iOS Speech Synthesis
-    if (!speechUnlocked && window.speechSynthesis && !stompMuted) {
-        try {
-            window.speechSynthesis.resume();
-            const silentUtterance = new SpeechSynthesisUtterance("語音已連線");
-            silentUtterance.lang = "zh-TW";
-            silentUtterance.volume = stompVolume;
-            window.speechSynthesis.speak(silentUtterance);
-            speechUnlocked = true;
-        } catch (e) {
-            console.error("iOS speech synthesis unlock failed:", e);
-        }
-    }
-
-    // Refresh voices list upon user interaction (crucial for iOS Safari lazy loading)
-    initVoices();
-}
-
-function playBeep(isTransition = false) {
-    if (stompMuted) return;
-    initAudioElements();
-    
-    const audio = isTransition ? transitionAudio : beepAudio;
-    if (audio) {
-        try {
-            audio.volume = stompVolume;
-            audio.currentTime = 0;
-            audio.play().catch(e => {
-                console.warn("Audio play blocked in tick:", e);
-            });
-        } catch (e) {
-            console.warn("Audio play error:", e);
-        }
-    }
-}
-
-function playTransitionSound() {
-    playBeep(true);
 }
 
 // --- Screen Wake Lock API ---
@@ -246,268 +197,28 @@ function releaseWakeLock() {
     }
 }
 
-// --- Text To Speech (Web Speech API) ---
-function initVoices() {
-    if (!window.speechSynthesis) {
-        voiceSelect.innerHTML = "<option>不支援語音功能</option>";
-        return;
-    }
-
-    const loadVoicesList = () => {
-        voicesList = window.speechSynthesis.getVoices();
-        
-        // Filter Chinese voices and prioritize TW/HK Traditional Chinese
-        let chineseVoices = voicesList.filter(v => v.lang.toLowerCase().includes("zh"));
-        let twVoices = chineseVoices.filter(v => v.lang.toLowerCase().includes("tw") || v.lang.toLowerCase().includes("hant"));
-        let hkVoices = chineseVoices.filter(v => v.lang.toLowerCase().includes("hk"));
-        let otherCnVoices = chineseVoices.filter(v => !twVoices.includes(v) && !hkVoices.includes(v));
-        
-        let sortedVoices = [...twVoices, ...hkVoices, ...otherCnVoices];
-        
-        voiceSelect.innerHTML = "";
-        
-        // Add default system voice option
-        const defaultOption = document.createElement("option");
-        defaultOption.value = "default";
-        defaultOption.textContent = "系統預設語音 (Default)";
-        voiceSelect.appendChild(defaultOption);
-
-        sortedVoices.forEach(voice => {
-            const option = document.createElement("option");
-            option.value = voice.name;
-            option.textContent = `${voice.name} (${voice.lang})`;
-            if (voice.name === preferredVoiceName) {
-                option.selected = true;
-                selectedVoice = voice;
-            }
-            voiceSelect.appendChild(option);
-        });
-
-        if (preferredVoiceName === "default" || !selectedVoice) {
-            voiceSelect.value = "default";
-            selectedVoice = null;
-        }
-    };
-
-    loadVoicesList();
-    if (window.speechSynthesis.onvoiceschanged !== undefined) {
-        window.speechSynthesis.onvoiceschanged = loadVoicesList;
-    }
-
-    // Fallback: If voices array is initially empty (common on mobile), force redraw option after a short delay
-    setTimeout(() => {
-        if (voicesList.length === 0) {
-            loadVoicesList();
-        }
-    }, 200);
-}
-
-function speak(text) {
-    if (stompMuted || !window.speechSynthesis) return;
-    try {
-        // Force resume in case WebKit is in a stuck paused state
-        window.speechSynthesis.resume();
-
-        const speakAction = () => {
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = "zh-TW"; // Force Traditional Chinese to prevent English system voice silent failure
-            utterance.volume = stompVolume;
-            utterance.rate = stompRate;
-            if (selectedVoice) {
-                utterance.voice = selectedVoice;
-            }
-            window.speechSynthesis.speak(utterance);
-        };
-
-        if (window.speechSynthesis.speaking) {
-            window.speechSynthesis.cancel();
-            setTimeout(speakAction, 50); // Delay 50ms to allow iOS WebKit to clear its cancellation state
-        } else {
-            speakAction();
-        }
-    } catch (e) {
-        console.warn("Speech synthesis failed:", e);
-    }
-}
-
-// --- Listeners & Controls ---
-function setupEventListeners() {
-    // Buttons interaction
-    btnSync.addEventListener("click", () => {
-        initAudio();
-        triggerSync();
-    });
-
-    btnPlayPause.addEventListener("click", () => {
-        initAudio();
-        togglePause();
-    });
-
-    btnShift.addEventListener("click", () => {
-        initAudio();
-        triggerShift();
-    });
-
-    btnMute.addEventListener("click", () => {
-        initAudio();
-        toggleMute();
-    });
-
-    btnReset.addEventListener("click", () => {
-        initAudio();
-        resetFocus();
-    });
-
-    // Double click or tap on timer display to reset back to standby
-    timerDisplay.addEventListener("dblclick", () => {
-        deactivateTimer();
-    });
-    
-    let lastTap = 0;
-    timerDisplay.addEventListener("touchend", (e) => {
-        const currentTime = new Date().getTime();
-        const tapLength = currentTime - lastTap;
-        if (tapLength < 300 && tapLength > 0) {
-            deactivateTimer();
-            e.preventDefault();
-        }
-        lastTap = currentTime;
-    });
-
-    // Corner stomp buttons focus toggle
-    document.querySelectorAll(".stomp-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
-            initAudio();
-            const index = parseInt(btn.getAttribute("data-index"));
-            toggleFocus(index);
-        });
-    });
-
-    // Select Voice
-    voiceSelect.addEventListener("change", (e) => {
-        preferredVoiceName = e.target.value;
-        selectedVoice = voicesList.find(v => v.name === preferredVoiceName);
-        saveSettings();
-        speak("語音設定已更新");
-    });
-
-    // Volume Slider
-    volumeSlider.addEventListener("input", (e) => {
-        stompVolume = parseFloat(e.target.value);
-        volumeVal.textContent = `${Math.round(stompVolume * 100)}%`;
-        saveSettings();
-    });
-
-    // Rate Slider
-    rateSlider.addEventListener("input", (e) => {
-        stompRate = parseFloat(e.target.value);
-        rateVal.textContent = `${stompRate.toFixed(1)}x`;
-        saveSettings();
-    });
-
-    // Alert Mode Select
-    alertModeSelect.addEventListener("change", (e) => {
-        stompAlertMode = e.target.value;
-        saveSettings();
-        if (stompAlertMode === "voice") {
-            speak("語音模式");
-        } else if (stompAlertMode === "both") {
-            speak("語音與嗶聲模式");
-        } else {
-            playBeep();
-        }
-    });
-
-    // Keyboard Fallbacks for Desktop users (Space: Sync, Enter: Shift/Calibrate)
-    window.addEventListener("keydown", (e) => {
-        if (e.code === "Space") {
-            e.preventDefault();
-            initAudio();
-            triggerSync();
-        } else if (e.code === "Enter" || e.code === "NumpadEnter") {
-            e.preventDefault();
-            initAudio();
-            triggerShift();
-        }
-    });
-
-    // Re-acquire Wake Lock when page becomes visible
-    document.addEventListener('visibilitychange', async () => {
-        if (stompActive && !stompPaused && document.visibilityState === 'visible') {
-            await requestWakeLock();
-        }
-    });
-}
-
-// --- Persistence ---
-function saveSettings() {
-    localStorage.setItem("stompMuted", stompMuted);
-    localStorage.setItem("stompVolume", stompVolume);
-    localStorage.setItem("stompRate", stompRate);
-    localStorage.setItem("stompAlertMode", stompAlertMode);
-    localStorage.setItem("preferredVoiceName", preferredVoiceName || "");
-}
-
-// Load settings
-function loadSettings() {
-    stompMuted = localStorage.getItem("stompMuted") === "true";
-    
-    const savedVol = localStorage.getItem("stompVolume");
-    if (savedVol !== null) {
-        stompVolume = parseFloat(savedVol);
-        volumeSlider.value = stompVolume;
-        volumeVal.textContent = `${Math.round(stompVolume * 100)}%`;
-    }
-    
-    const savedRate = localStorage.getItem("stompRate");
-    if (savedRate !== null) {
-        stompRate = parseFloat(savedRate);
-        rateSlider.value = stompRate;
-        rateVal.textContent = `${stompRate.toFixed(1)}x`;
-    }
-
-    const savedAlertMode = localStorage.getItem("stompAlertMode");
-    if (savedAlertMode !== null) {
-        stompAlertMode = savedAlertMode;
-        alertModeSelect.value = stompAlertMode;
-    }
-
-    preferredVoiceName = localStorage.getItem("preferredVoiceName") || null;
-    
-    if (stompMuted) {
-        btnMute.classList.add("muted");
-        btnMute.textContent = "🔇";
-    } else {
-        btnMute.classList.remove("muted");
-        btnMute.textContent = "🔊";
-    }
-}
-
 // --- State Machine Updates ---
 function triggerSync() {
     stompSecondsLeft = 10.0;
     stompActive = true;
     stompPaused = false;
-    stompSaidWarning = false;
-    stompSaidReady = false;
     stompBeeped.clear();
+    stompSaidWarning = false;
     
     updateUIState();
-    playBeep();
     statusBar.textContent = "👣 腳踩計時已鎖定同步";
     requestWakeLock();
 }
 
+// Manually advance stomp cycle index
 function triggerShift() {
     stompActiveIndex = (stompActiveIndex + 1) % 4;
     stompActive = true;
     stompPaused = false;
-    stompSaidWarning = false;
-    stompSaidReady = false;
     stompBeeped.clear();
+    stompSaidWarning = false;
     
     updateUIState();
-    playBeep();
     statusBar.textContent = "👣 腳踩招式已切換校正";
     requestWakeLock();
 }
@@ -516,9 +227,8 @@ function deactivateTimer() {
     stompActive = false;
     stompPaused = false;
     stompSecondsLeft = 10.0;
-    stompSaidWarning = false;
-    stompSaidReady = false;
     stompBeeped.clear();
+    stompSaidWarning = false;
     updateUIState();
     statusBar.textContent = "— 龍王待機中 —";
     releaseWakeLock();
@@ -535,18 +245,6 @@ function togglePause() {
     }
 }
 
-function toggleMute() {
-    stompMuted = !stompMuted;
-    saveSettings();
-    if (stompMuted) {
-        btnMute.classList.add("muted");
-        btnMute.textContent = "🔇";
-    } else {
-        btnMute.classList.remove("muted");
-        btnMute.textContent = "🔊";
-    }
-}
-
 function toggleFocus(index) {
     if (stompFocusedIndices.has(index)) {
         stompFocusedIndices.delete(index);
@@ -555,10 +253,10 @@ function toggleFocus(index) {
     }
 
     stompActive = true;
-    stompSaidWarning = false;
-    stompSaidReady = false;
     stompBeeped.clear();
+    stompSaidWarning = false;
     updateUIState();
+    saveSettings();
     requestWakeLock();
 
     if (stompFocusedIndices.size > 0) {
@@ -571,10 +269,10 @@ function toggleFocus(index) {
 
 function resetFocus() {
     stompFocusedIndices.clear();
-    stompSaidWarning = false;
-    stompSaidReady = false;
     stompBeeped.clear();
+    stompSaidWarning = false;
     updateUIState();
+    saveSettings();
     statusBar.textContent = "👣 回到輪播模式";
 }
 
@@ -630,7 +328,7 @@ function updateUIState() {
         btnSync.textContent = "⚡ 已鎖定計時中";
         btnSync.classList.add("active-sync");
     } else {
-        btnSync.textContent = "▶ 點擊解鎖音效 & 對齊計時";
+        btnSync.textContent = "⚡ 對齊計時 (Sync)";
         btnSync.classList.remove("active-sync");
     }
 
@@ -693,14 +391,17 @@ function tick() {
     if (stompSecondsLeft <= 0.0) {
         // Prevent clock drift: preserve the overshoot remainder to keep absolute time sync
         stompSecondsLeft = 10.0 + stompSecondsLeft;
-        stompActiveIndex = (stompActiveIndex + 1) % 4;
-        stompSaidWarning = false;
-        stompSaidReady = false;
-        stompBeeped.clear();
-        updateUIState();
-        if (stompAlertMode === "both" || stompAlertMode === "beep") {
-            playTransitionSound();
+        
+        // 0s double beep: 僅在專注模式，且下一個來臨的招式是專注的招式時播放
+        const upcomingIdx = (stompActiveIndex + 1) % 4;
+        if (stompFocusedIndices.size > 0 && stompFocusedIndices.has(upcomingIdx)) {
+            playDoubleBeep(1000, 0.08, 0.08);
         }
+
+        stompActiveIndex = upcomingIdx;
+        stompBeeped.clear();
+        stompSaidWarning = false;
+        updateUIState();
     }
 
     let countdown = stompSecondsLeft;
@@ -719,27 +420,24 @@ function tick() {
             }
         });
         countdown = minVal;
+    }
 
-        const nextStompIndex = (stompActiveIndex + 1) % 4;
-        if (stompFocusedIndices.has(nextStompIndex)) {
-            // TTS voice warning (for both or voice mode)
-            if (stompAlertMode === "both" || stompAlertMode === "voice") {
-                if (stompSecondsLeft <= 6.0 && !stompSaidWarning) {
-                    stompSaidWarning = true;
-                    speak(`${STOMP_NAMES[nextStompIndex]}準備`);
-                }
-            }
-            // Beep countdown (for both or beep mode)
-            if (stompAlertMode === "both" || stompAlertMode === "beep") {
-                for (let thr of [3, 2, 1]) {
-                    if (stompSecondsLeft <= thr && !stompBeeped.has(thr)) {
-                        stompBeeped.add(thr);
-                        playBeep();
-                    }
-                }
+    // 8s 語音與 3, 2, 1 beep: 僅在專注模式，且下一個來臨的招式是專注的招式時播放
+    const nextStompIndex = (stompActiveIndex + 1) % 4;
+    if (stompFocusedIndices.size > 0 && stompFocusedIndices.has(nextStompIndex)) {
+        // 8 秒語音警告
+        if (countdown <= 8.0 && !stompSaidWarning) {
+            stompSaidWarning = true;
+            speak(`下一個${STOMP_NAMES[nextStompIndex]}`);
+        }
+
+        // 3, 2, 1 beep
+        for (let thr of [3, 2, 1]) {
+            if (countdown <= thr && !stompBeeped.has(thr)) {
+                stompBeeped.add(thr);
+                playBeep(1000, 0.1);
             }
         }
-        // '注意' voice alert has been removed, transition beep sound is kept automatically in stomp transition handler.
     }
 
     if (countdown < 10.0) {

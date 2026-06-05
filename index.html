@@ -21,7 +21,7 @@
         <main class="timer-dashboard glass">
             <!-- Subtitle/Tip -->
             <div class="tip-bar">
-                <span>📱 觸控對齊 | ⚠️ iOS 需關閉實體靜音鍵才有 Beep 聲</span>
+                <span>📱 觸控對齊計時</span>
             </div>
 
             <!-- Stomp Canvas & Buttons Wrapper -->
@@ -75,12 +75,11 @@
             <!-- Mode/Status Label -->
             <div id="mode-display" class="mode-display">待機中 (請點擊下方開始)</div>
 
-            <!-- Control Buttons (Sync, Play/Pause, Shift, Mute) -->
+            <!-- Control Buttons (Sync, Play/Pause, Shift) -->
             <div class="control-row">
                 <button id="btn-play-pause" class="ctrl-btn" title="播放 / 暫停">⏸</button>
-                <button id="btn-sync" class="sync-btn">▶ 點擊解鎖音效 & 對齊計時</button>
+                <button id="btn-sync" class="sync-btn">⚡ 對齊計時 (Sync)</button>
                 <button id="btn-shift" class="ctrl-btn" title="手動校正 / 切換下一招">⏭</button>
-                <button id="btn-mute" class="ctrl-btn" title="靜音 / 取消靜音">🔊</button>
             </div>
 
             <!-- Status Bar -->
@@ -89,50 +88,12 @@
             </footer>
         </main>
 
-        <!-- Settings Section -->
-        <section class="settings-card glass">
-            <h2>⚙ 語音與音效設定</h2>
-            
-            <div class="setting-item">
-                <label for="voice-select">語音播報人員:</label>
-                <select id="voice-select" class="custom-select">
-                    <option value="default">載入語音中...</option>
-                </select>
-            </div>
-
-            <div class="setting-item">
-                <label for="alert-mode-select">提示模式 (Alert Mode):</label>
-                <select id="alert-mode-select" class="custom-select">
-                    <option value="both" selected>語音與倒數嗶聲 (Voice & Beep)</option>
-                    <option value="beep">僅倒數嗶聲 (Beep Only)</option>
-                    <option value="voice">僅語音播報 (Voice Only)</option>
-                </select>
-            </div>
-
-            <div class="setting-item">
-                <label for="volume-slider">音量大小 (Volume):</label>
-                <div class="slider-wrapper">
-                    <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="1" class="custom-slider">
-                    <span id="volume-val" class="slider-val">100%</span>
-                </div>
-            </div>
-
-            <div class="setting-item">
-                <label for="rate-slider">語音速度 (Speed):</label>
-                <div class="slider-wrapper">
-                    <input type="range" id="rate-slider" min="0.6" max="1.4" step="0.1" value="1.2" class="custom-slider">
-                    <span id="rate-val" class="slider-val">1.2x</span>
-                </div>
-            </div>
-        </section>
-
         <!-- Quick Guide Instructions -->
         <section class="instructions-card glass">
             <h2>📖 快速使用指南</h2>
             <ul class="instructions-list">
-                <li><strong>對齊計時</strong>：在手機點選中間大顆的「<strong>對齊計時</strong>」按鍵，這能解鎖音效權限並開始計時。在戰鬥中 BOSS 踩地時點選，計時器會立刻重設回 10 秒鎖定同步。</li>
-                <li><strong>iOS 靜音限制</strong>：⚠️ <strong>iOS (iPhone) 使用者請務必將手機側邊的「實體靜音開關」撥回響鈴模式</strong>。若在靜音模式下，語音合成（左輕準備）仍會發聲，但倒數的 Beep 嗶聲會被 iOS 系統自動靜音。</li>
-                <li><strong>專注特定招式</strong>：點選畫面四個角落的招式。點選後，計時器會在該招式來臨前 6 秒播報語音警告，並在最後 3 秒發出 Beep 倒數嗶聲。</li>
+                <li><strong>對齊計時</strong>：在手機點選中間大顆的「<strong>對齊計時</strong>」按鍵即可開始計時。在戰鬥中 BOSS 踩地時點選，計時器會立刻重設回 10 秒鎖定同步。</li>
+                <li><strong>專注特定招式</strong>：點選畫面四個角落的招式。點選後，計時器會開啟專注模式，並在該招式來臨前 10 秒開始倒數計時。</li>
                 <li><strong>返回待機</strong>：在中間的時間文字（如 10.0s）上「<strong>雙擊或點按兩下</strong>」，即可重設計時器回初始待機狀態。</li>
             </ul>
         </section>
