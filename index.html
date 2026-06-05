@@ -75,10 +75,11 @@
             <!-- Mode/Status Label -->
             <div id="mode-display" class="mode-display">待機中 (請點擊下方開始)</div>
 
-            <!-- Control Buttons (Sync, Play/Pause, Mute) -->
+            <!-- Control Buttons (Sync, Play/Pause, Shift, Mute) -->
             <div class="control-row">
                 <button id="btn-play-pause" class="ctrl-btn" title="播放 / 暫停">⏸</button>
                 <button id="btn-sync" class="sync-btn">▶ 點擊解鎖音效 & 對齊計時</button>
+                <button id="btn-shift" class="ctrl-btn" title="手動校正 / 切換下一招">⏭</button>
                 <button id="btn-mute" class="ctrl-btn" title="靜音 / 取消靜音">🔊</button>
             </div>
 
@@ -90,23 +91,29 @@
 
         <!-- Settings Section -->
         <section class="settings-card glass">
-            <h2>⚙ 系統與熱鍵設定</h2>
+            <h2>⚙ 語音與音效設定</h2>
             
             <div class="setting-item">
-                <label for="sync-key-btn">對齊熱鍵 (對齊10秒):</label>
-                <button id="sync-key-btn" class="bind-btn">未設定</button>
-            </div>
-            
-            <div class="setting-item">
-                <label for="shift-key-btn">切換熱鍵 (切換招式):</label>
-                <button id="shift-key-btn" class="bind-btn">未設定</button>
-            </div>
-
-            <div class="setting-item">
-                <label for="voice-select">語音播報設定:</label>
+                <label for="voice-select">語音播報人員:</label>
                 <select id="voice-select" class="custom-select">
                     <option value="default">載入語音中...</option>
                 </select>
+            </div>
+
+            <div class="setting-item">
+                <label for="volume-slider">音量大小 (Volume):</label>
+                <div class="slider-wrapper">
+                    <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="1" class="custom-slider">
+                    <span id="volume-val" class="slider-val">100%</span>
+                </div>
+            </div>
+
+            <div class="setting-item">
+                <label for="rate-slider">語音速度 (Speed):</label>
+                <div class="slider-wrapper">
+                    <input type="range" id="rate-slider" min="0.6" max="1.4" step="0.1" value="1.0" class="custom-slider">
+                    <span id="rate-val" class="slider-val">1.0x</span>
+                </div>
             </div>
         </section>
 

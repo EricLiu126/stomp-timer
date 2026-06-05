@@ -14,11 +14,9 @@ let stompSecondsLeft = 10.0;
 let stompFocusedIndices = new Set();
 let stompMuted = false;
 
-// Configurable Settings (saved to localStorage)
-let stompSyncKey = null;         // e.g. "KeyS"
-let stompSyncKeyChar = null;     // e.g. "S"
-let stompShiftKey = null;        // e.g. "KeyD"
-let stompShiftKeyChar = null;    // e.g. "D"
+// Audio Configuration (Volume & Speed)
+let stompVolume = 1.0;
+let stompRate = 1.0;
 let preferredVoiceName = null;
 
 // Alarm triggers tracking
@@ -31,9 +29,6 @@ let audioContext = null;
 let voicesList = [];
 let selectedVoice = null;
 
-// Hotkey binding state
-let bindingTarget = null; // "sync" or "shift"
-
 // Timing loop variables
 let timerInterval = null;
 let lastTickTime = Date.now();
@@ -41,14 +36,17 @@ let lastTickTime = Date.now();
 // --- DOM Elements ---
 const btnSync = document.getElementById("btn-sync");
 const btnPlayPause = document.getElementById("btn-play-pause");
+const btnShift = document.getElementById("btn-shift");
 const btnMute = document.getElementById("btn-mute");
 const btnReset = document.getElementById("btn-reset");
 const timerDisplay = document.getElementById("timer-display");
 const modeDisplay = document.getElementById("mode-display");
 const statusBar = document.getElementById("status-bar");
-const syncKeyBtn = document.getElementById("sync-key-btn");
-const shiftKeyBtn = document.getElementById("shift-key-btn");
 const voiceSelect = document.getElementById("voice-select");
+const volumeSlider = document.getElementById("volume-slider");
+const volumeVal = document.getElementById("volume-val");
+const rateSlider = document.getElementById("rate-slider");
+const rateVal = document.getElementById("rate-val");
 
 // --- Initialize App ---
 document.addEventListener("DOMContentLoaded", () => {
@@ -57,7 +55,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setupEventListeners();
     initVoices();
     
-    // Start interval but it will just return in tick() unless active
+    // Start interval
     lastTickTime = Date.now();
     timerInterval = setInterval(tick, 50);
 });
@@ -93,7 +91,8 @@ function playBeep(frequency = 1000, duration = 0.08) {
         osc.type = "sine";
         osc.frequency.setValueAtTime(frequency, audioContext.currentTime);
         
-        gain.gain.setValueAtTime(0.3, audioContext.currentTime);
+        // Apply volume slider setting
+        gain.gain.setValueAtTime(0.3 * stompVolume, audioContext.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
         
         osc.connect(gain);
@@ -121,16 +120,15 @@ function initVoices() {
     const loadVoicesList = () => {
         voicesList = window.speechSynthesis.getVoices();
         
-        // Filter Chinese voices (zh) and prioritize Taiwanese/HK Traditional Chinese (zh-TW, zh-HK)
+        // Filter Chinese voices and prioritize TW/HK Traditional Chinese
         let chineseVoices = voicesList.filter(v => v.lang.toLowerCase().includes("zh"));
         let twVoices = chineseVoices.filter(v => v.lang.toLowerCase().includes("tw") || v.lang.toLowerCase().includes("hant"));
         let hkVoices = chineseVoices.filter(v => v.lang.toLowerCase().includes("hk"));
         let otherCnVoices = chineseVoices.filter(v => !twVoices.includes(v) && !hkVoices.includes(v));
         
-        // Order: TW -> HK -> CN -> Others
         let sortedVoices = [...twVoices, ...hkVoices, ...otherCnVoices];
         if (sortedVoices.length === 0) {
-            sortedVoices = voicesList; // Fallback to all if no Chinese
+            sortedVoices = voicesList;
         }
         
         voiceSelect.innerHTML = "";
@@ -145,7 +143,6 @@ function initVoices() {
             voiceSelect.appendChild(option);
         });
 
-        // Set default selected if not set/found
         if (!selectedVoice && sortedVoices.length > 0) {
             selectedVoice = sortedVoices[0];
             voiceSelect.value = selectedVoice.name;
@@ -161,11 +158,12 @@ function initVoices() {
 function speak(text) {
     if (stompMuted || !window.speechSynthesis) return;
     try {
-        // Cancel ongoing speak to prevent delayed alerts
         window.speechSynthesis.cancel();
         
         const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 1.05; // Slightly faster to be snappy
+        utterance.volume = stompVolume; // Apply volume setting
+        utterance.rate = stompRate;     // Apply speech rate setting
+        
         if (selectedVoice) {
             utterance.voice = selectedVoice;
         }
@@ -175,34 +173,22 @@ function speak(text) {
     }
 }
 
-// --- Keybind Config & Global Listeners ---
+// --- Listeners & Controls ---
 function setupEventListeners() {
     // Buttons interaction
     btnSync.addEventListener("click", () => {
         initAudio();
         triggerSync();
     });
-    
-    // Double click or tap on timer display to reset back to standby
-    timerDisplay.addEventListener("dblclick", () => {
-        deactivateTimer();
-    });
-    
-    // Double tap for touch devices
-    let lastTap = 0;
-    timerDisplay.addEventListener("touchend", (e) => {
-        const currentTime = new Date().getTime();
-        const tapLength = currentTime - lastTap;
-        if (tapLength < 300 && tapLength > 0) {
-            deactivateTimer();
-            e.preventDefault();
-        }
-        lastTap = currentTime;
-    });
 
     btnPlayPause.addEventListener("click", () => {
         initAudio();
         togglePause();
+    });
+
+    btnShift.addEventListener("click", () => {
+        initAudio();
+        triggerShift();
     });
 
     btnMute.addEventListener("click", () => {
@@ -215,6 +201,22 @@ function setupEventListeners() {
         resetFocus();
     });
 
+    // Double click or tap on timer display to reset back to standby
+    timerDisplay.addEventListener("dblclick", () => {
+        deactivateTimer();
+    });
+    
+    let lastTap = 0;
+    timerDisplay.addEventListener("touchend", (e) => {
+        const currentTime = new Date().getTime();
+        const tapLength = currentTime - lastTap;
+        if (tapLength < 300 && tapLength > 0) {
+            deactivateTimer();
+            e.preventDefault();
+        }
+        lastTap = currentTime;
+    });
+
     // Corner stomp buttons focus toggle
     document.querySelectorAll(".stomp-btn").forEach(btn => {
         btn.addEventListener("click", () => {
@@ -224,42 +226,35 @@ function setupEventListeners() {
         });
     });
 
-    // Settings bind buttons
-    syncKeyBtn.addEventListener("click", () => {
-        startBinding("sync");
-    });
-
-    shiftKeyBtn.addEventListener("click", () => {
-        startBinding("shift");
-    });
-
+    // Select Voice
     voiceSelect.addEventListener("change", (e) => {
         preferredVoiceName = e.target.value;
         selectedVoice = voicesList.find(v => v.name === preferredVoiceName);
         saveSettings();
-        // Speak test
         speak("語音設定已更新");
     });
 
-    // Keyboard Hotkey Listener (only works when browser tab is active/focused)
-    window.addEventListener("keydown", (e) => {
-        // 1. If currently binding a key
-        if (bindingTarget) {
-            e.preventDefault();
-            if (e.key === "Escape") {
-                cancelBinding();
-                return;
-            }
-            bindKey(bindingTarget, e.code, e.key);
-            return;
-        }
+    // Volume Slider
+    volumeSlider.addEventListener("input", (e) => {
+        stompVolume = parseFloat(e.target.value);
+        volumeVal.textContent = `${Math.round(stompVolume * 100)}%`;
+        saveSettings();
+    });
 
-        // 2. Normal hotkey triggers
-        if (stompSyncKey && e.code === stompSyncKey) {
+    // Rate Slider
+    rateSlider.addEventListener("input", (e) => {
+        stompRate = parseFloat(e.target.value);
+        rateVal.textContent = `${stompRate.toFixed(1)}x`;
+        saveSettings();
+    });
+
+    // Keyboard Fallbacks for Desktop users (Space: Sync, Enter: Shift/Calibrate)
+    window.addEventListener("keydown", (e) => {
+        if (e.code === "Space") {
             e.preventDefault();
             initAudio();
             triggerSync();
-        } else if (stompShiftKey && e.code === stompShiftKey) {
+        } else if (e.code === "Enter" || e.code === "NumpadEnter") {
             e.preventDefault();
             initAudio();
             triggerShift();
@@ -267,80 +262,32 @@ function setupEventListeners() {
     });
 }
 
-function startBinding(target) {
-    bindingTarget = target;
-    if (target === "sync") {
-        syncKeyBtn.textContent = "[ 偵測中 ]";
-        syncKeyBtn.classList.add("binding");
-    } else {
-        shiftKeyBtn.textContent = "[ 偵測中 ]";
-        shiftKeyBtn.classList.add("binding");
-    }
-}
-
-function cancelBinding() {
-    syncKeyBtn.classList.remove("binding");
-    shiftKeyBtn.classList.remove("binding");
-    syncKeyBtn.textContent = stompSyncKeyChar ? stompSyncKeyChar.toUpperCase() : "未設定";
-    shiftKeyBtn.textContent = stompShiftKeyChar ? stompShiftKeyChar.toUpperCase() : "未設定";
-    bindingTarget = null;
-}
-
-// Maps standard code back to English characters to prevent Chinese IME bugs
-const PHYSICAL_KEY_MAP = {
-    "Space": "Space", "Enter": "Enter", "NumpadEnter": "Enter", "Backspace": "Backspace", "Tab": "Tab", "Escape": "Esc",
-    "ArrowLeft": "Left", "ArrowRight": "Right", "ArrowDown": "Down", "ArrowUp": "Up",
-    "KeyA": "A", "KeyB": "B", "KeyC": "C", "KeyD": "D", "KeyE": "E", "KeyF": "F", "KeyG": "G", "KeyH": "H", "KeyI": "I", "KeyJ": "J", "KeyK": "K", "KeyL": "L", "KeyM": "M", "KeyN": "N", "KeyO": "O", "KeyP": "P", "KeyQ": "Q", "KeyR": "R", "KeyS": "S", "KeyT": "T", "KeyU": "U", "KeyV": "V", "KeyW": "W", "KeyX": "X", "KeyY": "Y", "KeyZ": "Z",
-    "Digit0": "0", "Digit1": "1", "Digit2": "2", "Digit3": "3", "Digit4": "4", "Digit5": "5", "Digit6": "6", "Digit7": "7", "Digit8": "8", "Digit9": "9"
-};
-
-function bindKey(target, code, fallbackKey) {
-    let keyChar = PHYSICAL_KEY_MAP[code];
-    if (!keyChar) {
-        // Fallback for special keys not in the dictionary, filter to Latin if possible
-        keyChar = fallbackKey.length === 1 ? fallbackKey.toUpperCase() : code;
-    }
-    
-    if (target === "sync") {
-        if (stompShiftKey === code) {
-            stompShiftKey = null;
-            stompShiftKeyChar = null;
-        }
-        stompSyncKey = code;
-        stompSyncKeyChar = keyChar;
-    } else {
-        if (stompSyncKey === code) {
-            stompSyncKey = null;
-            stompSyncKeyChar = null;
-        }
-        stompShiftKey = code;
-        stompShiftKeyChar = keyChar;
-    }
-
-    saveSettings();
-    cancelBinding();
-}
-
 // --- Persistence ---
 function saveSettings() {
-    localStorage.setItem("stompSyncKey", stompSyncKey || "");
-    localStorage.setItem("stompSyncKeyChar", stompSyncKeyChar || "");
-    localStorage.setItem("stompShiftKey", stompShiftKey || "");
-    localStorage.setItem("stompShiftKeyChar", stompShiftKeyChar || "");
     localStorage.setItem("stompMuted", stompMuted);
+    localStorage.setItem("stompVolume", stompVolume);
+    localStorage.setItem("stompRate", stompRate);
     localStorage.setItem("preferredVoiceName", preferredVoiceName || "");
 }
 
 function loadSettings() {
-    stompSyncKey = localStorage.getItem("stompSyncKey") || null;
-    stompSyncKeyChar = localStorage.getItem("stompSyncKeyChar") || null;
-    stompShiftKey = localStorage.getItem("stompShiftKey") || null;
-    stompShiftKeyChar = localStorage.getItem("stompShiftKeyChar") || null;
     stompMuted = localStorage.getItem("stompMuted") === "true";
-    preferredVoiceName = localStorage.getItem("preferredVoiceName") || null;
+    
+    const savedVol = localStorage.getItem("stompVolume");
+    if (savedVol !== null) {
+        stompVolume = parseFloat(savedVol);
+        volumeSlider.value = stompVolume;
+        volumeVal.textContent = `${Math.round(stompVolume * 100)}%`;
+    }
+    
+    const savedRate = localStorage.getItem("stompRate");
+    if (savedRate !== null) {
+        stompRate = parseFloat(savedRate);
+        rateSlider.value = stompRate;
+        rateVal.textContent = `${stompRate.toFixed(1)}x`;
+    }
 
-    syncKeyBtn.textContent = stompSyncKeyChar ? stompSyncKeyChar.toUpperCase() : "未設定";
-    shiftKeyBtn.textContent = stompShiftKeyChar ? stompShiftKeyChar.toUpperCase() : "未設定";
+    preferredVoiceName = localStorage.getItem("preferredVoiceName") || null;
     
     if (stompMuted) {
         btnMute.classList.add("muted");
@@ -439,13 +386,10 @@ function resetFocus() {
 
 // --- UI Rendering ---
 function updateUIState() {
-    // 1. Stomp Corner Buttons Disable state
     const stompBtns = document.querySelectorAll(".stomp-btn");
     stompBtns.forEach(btn => {
         btn.disabled = !stompActive;
         const index = parseInt(btn.getAttribute("data-index"));
-        
-        // Remove old style classes
         btn.classList.remove("focused", "upcoming");
         
         if (stompActive) {
@@ -460,24 +404,25 @@ function updateUIState() {
         }
     });
 
-    // 2. Play/Pause button appearance
     btnPlayPause.textContent = stompPaused ? "▶" : "⏸";
     if (!stompActive) {
         btnPlayPause.disabled = true;
         btnPlayPause.style.opacity = 0.35;
+        btnShift.disabled = true;
+        btnShift.style.opacity = 0.35;
     } else {
         btnPlayPause.disabled = false;
         btnPlayPause.style.opacity = 1;
+        btnShift.disabled = false;
+        btnShift.style.opacity = 1;
     }
 
-    // 3. Center Reset Button active state
     if (stompFocusedIndices.size > 0 && stompActive) {
         btnReset.classList.add("active");
     } else {
         btnReset.classList.remove("active");
     }
 
-    // 4. SVG active arrow animation classes
     for (let i = 0; i < 4; i++) {
         const arrow = document.getElementById(`arrow-${i}`);
         if (stompActive && stompActiveIndex === i) {
@@ -487,7 +432,6 @@ function updateUIState() {
         }
     }
 
-    // 5. Sync Button appearance
     if (stompActive && !stompPaused) {
         btnSync.textContent = "⚡ 已鎖定計時中";
         btnSync.classList.add("active-sync");
@@ -496,7 +440,6 @@ function updateUIState() {
         btnSync.classList.remove("active-sync");
     }
 
-    // 6. Timer display color classes
     timerDisplay.classList.remove("active-rotating", "active-focused", "paused");
     if (!stompActive) {
         timerDisplay.textContent = "10.0s";
@@ -508,7 +451,6 @@ function updateUIState() {
         timerDisplay.classList.add("active-focused");
     }
 
-    // 7. Mode string text
     modeDisplay.classList.remove("focused");
     if (!stompActive) {
         modeDisplay.textContent = "待機中 (請點擊對齊開始)";
@@ -519,7 +461,6 @@ function updateUIState() {
     } else {
         modeDisplay.classList.add("focused");
         
-        // Find which focused stomp is closest
         let minVal = 999.0;
         let earliestIdx = null;
         stompFocusedIndices.forEach(idx => {
@@ -555,7 +496,6 @@ function tick() {
 
     stompSecondsLeft -= dt;
 
-    // Handle transition to next stomp state
     if (stompSecondsLeft <= 0.0) {
         stompSecondsLeft = 10.0;
         stompActiveIndex = (stompActiveIndex + 1) % 4;
@@ -566,7 +506,6 @@ function tick() {
         playTransitionSound();
     }
 
-    // Determine value to display (closest countdown to focused index)
     let countdown = stompSecondsLeft;
     if (stompFocusedIndices.size > 0) {
         let minVal = 999.0;
@@ -584,7 +523,6 @@ function tick() {
         });
         countdown = minVal;
 
-        // Audio Alarm 1: 5-second warning ("準備") and beeps for next focused stomp
         const nextStompIndex = (stompActiveIndex + 1) % 4;
         if (stompFocusedIndices.has(nextStompIndex)) {
             if (stompSecondsLeft <= 5.0 && !stompSaidWarning) {
@@ -599,7 +537,6 @@ function tick() {
             }
         }
 
-        // Audio Alarm 2: Start alert ("注意") on transitioning into a focused stomp
         if (stompFocusedIndices.has(stompActiveIndex)) {
             if (stompSecondsLeft > 9.8 && !stompSaidReady) {
                 stompSaidReady = true;
@@ -609,7 +546,6 @@ function tick() {
         }
     }
 
-    // Display countdown formatted to 1 decimal place (if < 10s)
     if (countdown < 10.0) {
         timerDisplay.textContent = `${countdown.toFixed(1)}s`;
     } else {
