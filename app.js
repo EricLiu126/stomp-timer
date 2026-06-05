@@ -16,7 +16,7 @@ let stompMuted = false;
 
 // Audio Configuration (Volume & Speed)
 let stompVolume = 1.0;
-let stompRate = 1.0;
+let stompRate = 1.2;
 let preferredVoiceName = null;
 
 // Alarm triggers tracking
@@ -642,7 +642,7 @@ function tick() {
 
         const nextStompIndex = (stompActiveIndex + 1) % 4;
         if (stompFocusedIndices.has(nextStompIndex)) {
-            if (stompSecondsLeft <= 5.0 && !stompSaidWarning) {
+            if (stompSecondsLeft <= 6.0 && !stompSaidWarning) {
                 stompSaidWarning = true;
                 speak(`${STOMP_NAMES[nextStompIndex]}準備`);
             }
