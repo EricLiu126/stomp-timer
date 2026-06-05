@@ -25,7 +25,9 @@ let stompSaidReady = false;
 let stompBeeped = new Set();
 
 // TTS & Audio variables
-let beepAudio = null;
+let beepAudioPool = [];
+let nextBeepIndex = 0;
+const BEEP_POOL_SIZE = 3;
 let transitionAudio = null;
 let voicesList = [];
 let selectedVoice = null;
@@ -58,7 +60,7 @@ document.addEventListener("DOMContentLoaded", () => {
     
     // Start interval
     lastTickTime = Date.now();
-    timerInterval = setInterval(tick, 50);
+    timerInterval = setInterval(tick, 10);
 });
 
 // Generates a short WAV file dynamically in memory and returns a local object URL
@@ -149,10 +151,12 @@ function createBeepWavUrl(frequency = 1000, duration = 0.08) {
 }
 
 function initAudioElements() {
-    if (!beepAudio) {
+    if (beepAudioPool.length === 0) {
         // Standard beep: 2000Hz (more piercing) and 0.12 seconds (longer and louder)
         const beepUrl = createBeepWavUrl(2000, 0.12);
-        beepAudio = new Audio(beepUrl);
+        for (let i = 0; i < BEEP_POOL_SIZE; i++) {
+            beepAudioPool.push(new Audio(beepUrl));
+        }
     }
     if (!transitionAudio) {
         // Transition tink: 2800Hz (high-pitched bell) and 0.16 seconds
@@ -166,18 +170,21 @@ function initAudio() {
     
     // Play both audio elements silently to unlock browser restrictions on iOS
     try {
-        beepAudio.volume = 0.001;
-        transitionAudio.volume = 0.001;
+        beepAudioPool.forEach(audio => {
+            audio.volume = 0.001;
+            audio.play().then(() => {
+                audio.pause();
+                audio.currentTime = 0;
+            }).catch(e => console.warn("Beep audio unlock skipped:", e));
+        });
         
-        beepAudio.play().then(() => {
-            beepAudio.pause();
-            beepAudio.currentTime = 0;
-        }).catch(e => console.warn("Beep audio unlock skipped:", e));
-        
-        transitionAudio.play().then(() => {
-            transitionAudio.pause();
-            transitionAudio.currentTime = 0;
-        }).catch(e => console.warn("Transition audio unlock skipped:", e));
+        if (transitionAudio) {
+            transitionAudio.volume = 0.001;
+            transitionAudio.play().then(() => {
+                transitionAudio.pause();
+                transitionAudio.currentTime = 0;
+            }).catch(e => console.warn("Transition audio unlock skipped:", e));
+        }
     } catch (e) {
         console.warn("Audio unlock warning:", e);
     }
@@ -198,16 +205,31 @@ function playBeep(isTransition = false) {
     if (stompMuted) return;
     initAudioElements();
     
-    const audio = isTransition ? transitionAudio : beepAudio;
-    if (audio) {
-        try {
-            audio.volume = stompVolume;
-            audio.currentTime = 0;
-            audio.play().catch(e => {
-                console.warn("Audio play blocked in tick:", e);
-            });
-        } catch (e) {
-            console.warn("Audio play error:", e);
+    if (isTransition) {
+        if (transitionAudio) {
+            try {
+                transitionAudio.volume = stompVolume;
+                transitionAudio.currentTime = 0;
+                transitionAudio.play().catch(e => {
+                    console.warn("Audio play blocked in tick:", e);
+                });
+            } catch (e) {
+                console.warn("Audio play error:", e);
+            }
+        }
+    } else {
+        if (beepAudioPool.length > 0) {
+            try {
+                const audio = beepAudioPool[nextBeepIndex];
+                nextBeepIndex = (nextBeepIndex + 1) % BEEP_POOL_SIZE;
+                audio.volume = stompVolume;
+                audio.currentTime = 0;
+                audio.play().catch(e => {
+                    console.warn("Audio play blocked in tick:", e);
+                });
+            } catch (e) {
+                console.warn("Audio play error:", e);
+            }
         }
     }
 }
@@ -292,31 +314,24 @@ function speak(text) {
 
 // --- Listeners & Controls ---
 function setupEventListeners() {
+    const addQuickListener = (btn, action) => {
+        btn.addEventListener("pointerdown", (e) => {
+            e.preventDefault();
+            initAudio();
+            action(e);
+        });
+        // Prevent default click behavior to avoid double trigger
+        btn.addEventListener("click", (e) => {
+            e.preventDefault();
+        });
+    };
+
     // Buttons interaction
-    btnSync.addEventListener("click", () => {
-        initAudio();
-        triggerSync();
-    });
-
-    btnPlayPause.addEventListener("click", () => {
-        initAudio();
-        togglePause();
-    });
-
-    btnShift.addEventListener("click", () => {
-        initAudio();
-        triggerShift();
-    });
-
-    btnMute.addEventListener("click", () => {
-        initAudio();
-        toggleMute();
-    });
-
-    btnReset.addEventListener("click", () => {
-        initAudio();
-        resetFocus();
-    });
+    addQuickListener(btnSync, () => triggerSync());
+    addQuickListener(btnPlayPause, () => togglePause());
+    addQuickListener(btnShift, () => triggerShift());
+    addQuickListener(btnMute, () => toggleMute());
+    addQuickListener(btnReset, () => resetFocus());
 
     // Double click or tap on timer display to reset back to standby
     timerDisplay.addEventListener("dblclick", () => {
@@ -336,8 +351,7 @@ function setupEventListeners() {
 
     // Corner stomp buttons focus toggle
     document.querySelectorAll(".stomp-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
-            initAudio();
+        addQuickListener(btn, () => {
             const index = parseInt(btn.getAttribute("data-index"));
             toggleFocus(index);
         });
@@ -614,7 +628,8 @@ function tick() {
     stompSecondsLeft -= dt;
 
     if (stompSecondsLeft <= 0.0) {
-        stompSecondsLeft = 10.0;
+        // Prevent clock drift: preserve the overshoot remainder to keep absolute time sync
+        stompSecondsLeft = 10.0 + stompSecondsLeft;
         stompActiveIndex = (stompActiveIndex + 1) % 4;
         stompSaidWarning = false;
         stompSaidReady = false;
