@@ -63,7 +63,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Generates a short WAV file dynamically in memory and returns a local object URL
 function createBeepWavUrl(frequency = 1000, duration = 0.08) {
-    const sampleRate = 8000;
+    const sampleRate = 44100;
     const numSamples = sampleRate * duration;
     const bufferSize = 44 + numSamples;
     const buffer = new Uint8Array(bufferSize);
@@ -132,7 +132,14 @@ function createBeepWavUrl(frequency = 1000, duration = 0.08) {
     for (let i = 0; i < numSamples; i++) {
         const t = i / sampleRate;
         const s = Math.sin(2 * Math.PI * frequency * t);
-        const envelope = 1 - (i / numSamples); // Fade out to prevent popping
+        
+        // Flat envelope: Keep 100% volume for the first 80%, then fade out in the last 20% to prevent popping
+        let envelope = 1.0;
+        const fadeStart = numSamples * 0.8;
+        if (i > fadeStart) {
+            envelope = 1.0 - ((i - fadeStart) / (numSamples - fadeStart));
+        }
+        
         const sampleValue = Math.round(128 + 127 * s * envelope);
         buffer[44 + i] = sampleValue;
     }
@@ -143,11 +150,13 @@ function createBeepWavUrl(frequency = 1000, duration = 0.08) {
 
 function initAudioElements() {
     if (!beepAudio) {
-        const beepUrl = createBeepWavUrl(1000, 0.08); // standard 1kHz beep
+        // Standard beep: 2000Hz (more piercing) and 0.12 seconds (longer and louder)
+        const beepUrl = createBeepWavUrl(2000, 0.12);
         beepAudio = new Audio(beepUrl);
     }
     if (!transitionAudio) {
-        const transUrl = createBeepWavUrl(1800, 0.15); // higher pitch tink sound
+        // Transition tink: 2800Hz (high-pitched bell) and 0.16 seconds
+        const transUrl = createBeepWavUrl(2800, 0.16);
         transitionAudio = new Audio(transUrl);
     }
 }
