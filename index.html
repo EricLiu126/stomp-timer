@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>龍王腳踩計時器 (網頁版)</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>👣 龍王腳踩計時器 <span class="badge">網頁版</span></h1>
+        </header>
+
+        <!-- Main Timer Dashboard -->
+        <main class="timer-dashboard glass">
+            <!-- Subtitle/Tip -->
+            <div class="tip-bar">
+                <span>⌨ 支援電腦按鍵 | 雙擊或觸控對齊</span>
+            </div>
+
+            <!-- Stomp Canvas & Buttons Wrapper -->
+            <div class="stomp-wrapper">
+                <!-- SVG Arrow Canvas -->
+                <svg class="arrow-canvas" viewBox="0 0 135 100">
+                    <!-- Left Up Arrow (Index 0: Left Light -> Left Heavy) -->
+                    <g id="arrow-0" class="arrow-group">
+                        <path class="arrow-line" d="M 27,65 L 27,35" />
+                        <path class="arrow-head" d="M 23,41 L 27,35 L 31,41" />
+                    </g>
+                    
+                    <!-- Diag Right Arrow (Index 1: Left Heavy -> Right Light) -->
+                    <g id="arrow-1" class="arrow-group">
+                        <path class="arrow-line" d="M 49,31 L 85,69" />
+                        <path class="arrow-head" d="M 85,60 L 85,69 L 76,69" />
+                    </g>
+                    
+                    <!-- Right Up Arrow (Index 2: Right Light -> Right Heavy) -->
+                    <g id="arrow-2" class="arrow-group">
+                        <path class="arrow-line" d="M 107,65 L 107,35" />
+                        <path class="arrow-head" d="M 103,41 L 107,35 L 111,41" />
+                    </g>
+                    
+                    <!-- Diag Left Arrow (Index 3: Right Heavy -> Left Light) (Dashed) -->
+                    <g id="arrow-3" class="arrow-group">
+                        <path class="arrow-line dashed" d="M 85,31 L 49,69" />
+                        <path class="arrow-head" d="M 49,60 L 49,69 L 58,69" />
+                    </g>
+                </svg>
+
+                <!-- Corner Stomp Buttons -->
+                <div class="quadrant-buttons">
+                    <div class="row top-row">
+                        <button id="btn-stomp-1" class="stomp-btn" data-index="1" disabled>左重</button>
+                        <button id="btn-stomp-3" class="stomp-btn" data-index="3" disabled>右重</button>
+                    </div>
+                    <div class="row bottom-row">
+                        <button id="btn-stomp-0" class="stomp-btn" data-index="0" disabled>左輕</button>
+                        <button id="btn-stomp-2" class="stomp-btn" data-index="2" disabled>右輕</button>
+                    </div>
+                </div>
+
+                <!-- Center Reset Button -->
+                <button id="btn-reset" class="center-reset-btn" title="重設招式專注">↺</button>
+            </div>
+
+            <!-- Digital Countdown Display -->
+            <div id="timer-display" class="timer-display">10.0s</div>
+
+            <!-- Mode/Status Label -->
+            <div id="mode-display" class="mode-display">待機中 (請點擊下方開始)</div>
+
+            <!-- Control Buttons (Sync, Play/Pause, Mute) -->
+            <div class="control-row">
+                <button id="btn-play-pause" class="ctrl-btn" title="播放 / 暫停">⏸</button>
+                <button id="btn-sync" class="sync-btn">▶ 點擊解鎖音效 & 對齊計時</button>
+                <button id="btn-mute" class="ctrl-btn" title="靜音 / 取消靜音">🔊</button>
+            </div>
+
+            <!-- Status Bar -->
+            <footer class="status-bar" id="status-bar">
+                — 龍王待機中 —
+            </footer>
+        </main>
+
+        <!-- Settings Section -->
+        <section class="settings-card glass">
+            <h2>⚙ 系統與熱鍵設定</h2>
+            
+            <div class="setting-item">
+                <label for="sync-key-btn">對齊熱鍵 (對齊10秒):</label>
+                <button id="sync-key-btn" class="bind-btn">未設定</button>
+            </div>
+            
+            <div class="setting-item">
+                <label for="shift-key-btn">切換熱鍵 (切換招式):</label>
+                <button id="shift-key-btn" class="bind-btn">未設定</button>
+            </div>
+
+            <div class="setting-item">
+                <label for="voice-select">語音播報設定:</label>
+                <select id="voice-select" class="custom-select">
+                    <option value="default">載入語音中...</option>
+                </select>
+            </div>
+        </section>
+
+        <!-- Quick Guide Instructions -->
+        <section class="instructions-card glass">
+            <h2>📖 快速使用指南</h2>
+            <ul class="instructions-list">
+                <li><strong>手機點擊開始</strong>：請在手機點選大顆的「<strong>對齊計時</strong>」按鍵，這能同時啟用瀏覽器的音訊播放與語音朗讀權限。</li>
+                <li><strong>對齊計時</strong>：在遊戲中 BOSS 開始轉身或踏出第一步踩地時，點擊「對齊計時」按鍵（或按下電腦鍵盤設定的對齊熱鍵），計時器會立刻重設回 10 秒並開始發聲。</li>
+                <li><strong>專注特定招式</strong>：點選畫面四個角落的招式（左輕、左重、右輕、右重）。點選後，計時器會在即將迎來該招式前 5 秒播放語音警告（例如：「左輕準備」），並在最後 3 秒發出倒數嗶聲。</li>
+                <li><strong>電腦版全域限制</strong>：若在電腦上執行，由於瀏覽器安全機制，當切換回遊戲視窗時，網頁將無法偵測到鍵盤熱鍵。建議將網頁開在手機/平板上，放在螢幕旁用手指點擊同步，體驗最佳！</li>
+            </ul>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
