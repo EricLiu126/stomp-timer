@@ -22,12 +22,10 @@ let preferredVoiceName = null;
 // Alarm triggers tracking
 let stompSaidWarning = false;
 let stompSaidReady = false;
-let stompBeeped = new Set();
 
 // TTS & Audio variables
-let beepAudioPool = [];
-let nextBeepIndex = 0;
-const BEEP_POOL_SIZE = 3;
+let beepAudio = null;
+let countdownAudio = null;
 let transitionAudio = null;
 let voicesList = [];
 let selectedVoice = null;
@@ -150,13 +148,119 @@ function createBeepWavUrl(frequency = 1000, duration = 0.08) {
     return URL.createObjectURL(blob);
 }
 
+// Generates a single WAV file containing three beeps spaced 1.0 second apart
+function createCountdownWavUrl() {
+    const sampleRate = 44100;
+    const duration = 2.2; // 3 beeps: at 0.0s, 1.0s, 2.0s. Total duration 2.2s.
+    const numSamples = sampleRate * duration;
+    const bufferSize = 44 + numSamples;
+    const buffer = new Uint8Array(bufferSize);
+
+    // 1. WAV Header (RIFF)
+    buffer[0] = 0x52; // 'R'
+    buffer[1] = 0x49; // 'I'
+    buffer[2] = 0x46; // 'F'
+    buffer[3] = 0x46; // 'F'
+    
+    const fileSize = bufferSize - 8;
+    buffer[4] = fileSize & 0xff;
+    buffer[5] = (fileSize >> 8) & 0xff;
+    buffer[6] = (fileSize >> 16) & 0xff;
+    buffer[7] = (fileSize >> 24) & 0xff;
+
+    buffer[8] = 0x57;  // 'W'
+    buffer[9] = 0x41;  // 'A'
+    buffer[10] = 0x56; // 'V'
+    buffer[11] = 0x45; // 'E'
+
+    // 2. fmt Subchunk
+    buffer[12] = 0x66; // 'f'
+    buffer[13] = 0x6d; // 'm'
+    buffer[14] = 0x74; // 't'
+    buffer[15] = 0x20; // ' '
+
+    buffer[16] = 16;   // Subchunk1Size
+    buffer[17] = 0;
+    buffer[18] = 0;
+    buffer[19] = 0;
+
+    buffer[20] = 1;    // AudioFormat (PCM)
+    buffer[21] = 0;
+    buffer[22] = 1;    // NumChannels (1 mono)
+    buffer[23] = 0;
+
+    buffer[24] = sampleRate & 0xff;
+    buffer[25] = (sampleRate >> 8) & 0xff;
+    buffer[26] = (sampleRate >> 16) & 0xff;
+    buffer[27] = (sampleRate >> 24) & 0xff;
+
+    const byteRate = sampleRate;
+    buffer[28] = byteRate & 0xff;
+    buffer[29] = (byteRate >> 8) & 0xff;
+    buffer[30] = (byteRate >> 16) & 0xff;
+    buffer[31] = (byteRate >> 24) & 0xff;
+
+    buffer[32] = 1;    // BlockAlign
+    buffer[33] = 0;
+    buffer[34] = 8;    // BitsPerSample (8 bits)
+    buffer[35] = 0;
+
+    // 3. Subchunk 2 (data)
+    buffer[36] = 0x64; // 'd'
+    buffer[37] = 0x61; // 'a'
+    buffer[38] = 0x74; // 't'
+    buffer[39] = 0x61; // 'a'
+
+    buffer[40] = numSamples & 0xff;
+    buffer[41] = (numSamples >> 8) & 0xff;
+    buffer[42] = (numSamples >> 16) & 0xff;
+    buffer[43] = (numSamples >> 24) & 0xff;
+
+    // 4. Generate Samples (silence center value 128)
+    buffer.fill(128, 44);
+
+    const frequency = 2000;
+    const beepDuration = 0.12;
+    const beepSamples = sampleRate * beepDuration;
+
+    // Place 3 beeps at 0.0s, 1.0s, and 2.0s
+    const startOffsets = [0.0, 1.0, 2.0];
+
+    for (let startOffset of startOffsets) {
+        const startIndex = Math.round(startOffset * sampleRate);
+        for (let i = 0; i < beepSamples; i++) {
+            const sampleIdx = startIndex + i;
+            if (sampleIdx >= numSamples) break;
+
+            const t = i / sampleRate;
+            const s = Math.sin(2 * Math.PI * frequency * t);
+            
+            // Fade out in the last 20% to prevent popping
+            let envelope = 1.0;
+            const fadeStart = beepSamples * 0.8;
+            if (i > fadeStart) {
+                envelope = 1.0 - ((i - fadeStart) / (beepSamples - fadeStart));
+            }
+            
+            const sampleValue = Math.round(128 + 127 * s * envelope);
+            buffer[44 + sampleIdx] = sampleValue;
+        }
+    }
+
+    const blob = new Blob([buffer], { type: "audio/wav" });
+    return URL.createObjectURL(blob);
+}
+
 function initAudioElements() {
-    if (beepAudioPool.length === 0) {
+    if (!beepAudio) {
         // Standard beep: 2000Hz (more piercing) and 0.12 seconds (longer and louder)
         const beepUrl = createBeepWavUrl(2000, 0.12);
-        for (let i = 0; i < BEEP_POOL_SIZE; i++) {
-            beepAudioPool.push(new Audio(beepUrl));
-        }
+        beepAudio = new Audio(beepUrl);
+    }
+    if (!countdownAudio) {
+        // 3-second countdown WAV containing 3 beeps spaced 1.0s apart
+        const countdownUrl = createCountdownWavUrl();
+        countdownAudio = new Audio(countdownUrl);
     }
     if (!transitionAudio) {
         // Transition tink: 2800Hz (high-pitched bell) and 0.16 seconds
@@ -168,16 +272,22 @@ function initAudioElements() {
 function initAudio() {
     initAudioElements();
     
-    // Play both audio elements silently to unlock browser restrictions on iOS
+    // Play audio elements silently to unlock browser restrictions on iOS
     try {
-        beepAudioPool.forEach(audio => {
-            audio.volume = 0.001;
-            audio.play().then(() => {
-                audio.pause();
-                audio.currentTime = 0;
+        if (beepAudio) {
+            beepAudio.volume = 0.001;
+            beepAudio.play().then(() => {
+                beepAudio.pause();
+                beepAudio.currentTime = 0;
             }).catch(e => console.warn("Beep audio unlock skipped:", e));
-        });
-        
+        }
+        if (countdownAudio) {
+            countdownAudio.volume = 0.001;
+            countdownAudio.play().then(() => {
+                countdownAudio.pause();
+                countdownAudio.currentTime = 0;
+            }).catch(e => console.warn("Countdown audio unlock skipped:", e));
+        }
         if (transitionAudio) {
             transitionAudio.volume = 0.001;
             transitionAudio.play().then(() => {
@@ -205,31 +315,43 @@ function playBeep(isTransition = false) {
     if (stompMuted) return;
     initAudioElements();
     
-    if (isTransition) {
-        if (transitionAudio) {
-            try {
-                transitionAudio.volume = stompVolume;
-                transitionAudio.currentTime = 0;
-                transitionAudio.play().catch(e => {
-                    console.warn("Audio play blocked in tick:", e);
-                });
-            } catch (e) {
-                console.warn("Audio play error:", e);
-            }
+    const audio = isTransition ? transitionAudio : beepAudio;
+    if (audio) {
+        try {
+            audio.volume = stompVolume;
+            audio.currentTime = 0;
+            audio.play().catch(e => {
+                console.warn("Audio play blocked in tick:", e);
+            });
+        } catch (e) {
+            console.warn("Audio play error:", e);
         }
-    } else {
-        if (beepAudioPool.length > 0) {
-            try {
-                const audio = beepAudioPool[nextBeepIndex];
-                nextBeepIndex = (nextBeepIndex + 1) % BEEP_POOL_SIZE;
-                audio.volume = stompVolume;
-                audio.currentTime = 0;
-                audio.play().catch(e => {
-                    console.warn("Audio play blocked in tick:", e);
-                });
-            } catch (e) {
-                console.warn("Audio play error:", e);
-            }
+    }
+}
+
+function playCountdown() {
+    if (stompMuted) return;
+    initAudioElements();
+    if (countdownAudio) {
+        try {
+            countdownAudio.volume = stompVolume;
+            countdownAudio.currentTime = 0;
+            countdownAudio.play().catch(e => {
+                console.warn("Countdown play blocked in tick:", e);
+            });
+        } catch (e) {
+            console.warn("Countdown play error:", e);
+        }
+    }
+}
+
+function stopCountdown() {
+    if (countdownAudio) {
+        try {
+            countdownAudio.pause();
+            countdownAudio.currentTime = 0;
+        } catch (e) {
+            console.warn("Countdown stop error:", e);
         }
     }
 }
@@ -431,6 +553,7 @@ function loadSettings() {
 
 // --- State Machine Updates ---
 function triggerSync() {
+    stopCountdown();
     stompSecondsLeft = 10.0;
     stompActive = true;
     stompPaused = false;
@@ -444,6 +567,7 @@ function triggerSync() {
 }
 
 function triggerShift() {
+    stopCountdown();
     stompActiveIndex = (stompActiveIndex + 1) % 4;
     stompActive = true;
     stompPaused = false;
@@ -457,6 +581,7 @@ function triggerShift() {
 }
 
 function deactivateTimer() {
+    stopCountdown();
     stompActive = false;
     stompPaused = false;
     stompSecondsLeft = 10.0;
@@ -470,6 +595,9 @@ function deactivateTimer() {
 function togglePause() {
     if (!stompActive) return;
     stompPaused = !stompPaused;
+    if (stompPaused) {
+        stopCountdown();
+    }
     updateUIState();
 }
 
@@ -479,6 +607,7 @@ function toggleMute() {
     if (stompMuted) {
         btnMute.classList.add("muted");
         btnMute.textContent = "🔇";
+        stopCountdown();
     } else {
         btnMute.classList.remove("muted");
         btnMute.textContent = "🔊";
@@ -496,6 +625,7 @@ function toggleFocus(index) {
     stompSaidWarning = false;
     stompSaidReady = false;
     stompBeeped.clear();
+    stopCountdown();
     updateUIState();
 
     if (stompFocusedIndices.size > 0) {
@@ -511,6 +641,7 @@ function resetFocus() {
     stompSaidWarning = false;
     stompSaidReady = false;
     stompBeeped.clear();
+    stopCountdown();
     updateUIState();
     statusBar.textContent = "👣 回到輪播模式";
 }
@@ -661,11 +792,9 @@ function tick() {
                 stompSaidWarning = true;
                 speak(`${STOMP_NAMES[nextStompIndex]}準備`);
             }
-            for (let thr of [3, 2, 1]) {
-                if (stompSecondsLeft <= thr && !stompBeeped.has(thr)) {
-                    stompBeeped.add(thr);
-                    playBeep();
-                }
+            if (stompSecondsLeft <= 3.0 && !stompBeeped.has(3)) {
+                stompBeeped.add(3);
+                playCountdown();
             }
         }
         // '注意' voice alert has been removed, transition beep sound is kept automatically in stomp transition handler.
